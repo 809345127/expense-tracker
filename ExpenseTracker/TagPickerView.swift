@@ -1,0 +1,212 @@
+import SwiftUI
+import SwiftData
+
+/// 标签多选器。两处复用：记一笔时给记录打标签、明细页按标签筛选。
+struct TagPickerView: View {
+    @Binding var selection: Set<PersistentIdentifier>
+    var title: String = "标签"
+    /// 是否允许新建 / 改名 / 删除。筛选场景下关掉，避免筛着筛着把数据改了
+    var allowsEditing: Bool = true
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var context
+
+    // 故意不在 @Query 里写 #Predicate 过滤 isArchived：
+    // SwiftData 对布尔取反这类谓词的支持不稳，编译能过但运行时可能直接抛「不支持的谓词」
+    // 把整个弹层打崩。标签总量就几十个，取出来在内存里滤掉更稳，也更快。
+    @Query(sort: [SortDescriptor(\Tag.sortOrder), SortDescriptor(\Tag.createdAt)])
+    private var allTags: [Tag]
+
+    private var tags: [Tag] { allTags.filter { !$0.isArchived } }
+
+    @State private var search = ""
+    @State private var renaming: Tag?
+    @State private var renameText = ""
+    @State private var showingRename = false
+    @State private var pendingDelete: Tag?
+    @State private var showingDelete = false
+    @State private var alertMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                // 搜索框里输入了一个还不存在的名字 → 直接给个新建入口
+                if let name = pendingNewName {
+                    Section {
+                        Button {
+                            create(named: name)
+                        } label: {
+                            Label("新建标签「\(name)」", systemImage: "plus.circle.fill")
+                        }
+                    }
+                }
+
+                if tags.isEmpty {
+                    Section {
+                        ContentUnavailableView {
+                            Label("还没有标签", systemImage: "tag")
+                        } description: {
+                            Text("在上面搜索框里直接输入名字就能新建，比如「出差」「可报销」「请客」。")
+                        }
+                    }
+                } else {
+                    Section {
+                        ForEach(visibleTags) { tag in
+                            row(for: tag)
+                        }
+                    } footer: {
+                        Text(allowsEditing
+                             ? "一笔可以打多个标签。左滑某个标签可以改名或删除。"
+                             : "选中多个标签时，同一笔记录只算一次钱。")
+                    }
+                }
+            }
+            // 筛选模式下不能新建标签，提示语不要误导
+            .searchable(text: $search, prompt: allowsEditing ? "搜索，或输入新标签名" : "搜索标签")
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("清空") { selection.removeAll() }
+                        .disabled(selection.isEmpty)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { dismiss() }
+                        .fontWeight(.semibold)
+                }
+            }
+            .alert("重命名标签", isPresented: $showingRename) {
+                TextField("标签名", text: $renameText)
+                Button("保存") { commitRename() }
+                Button("取消", role: .cancel) { renaming = nil }
+            }
+            .confirmationDialog(
+                "删除标签「\(pendingDelete?.name ?? "")」？",
+                isPresented: $showingDelete,
+                titleVisibility: .visible
+            ) {
+                Button("删除", role: .destructive) { confirmDelete() }
+                Button("取消", role: .cancel) { pendingDelete = nil }
+            } message: {
+                Text("这个标签用在 \(pendingDelete?.expenses.count ?? 0) 笔记录上。删掉后那些记录会失去这个标签，金额和其它内容不受影响。")
+            }
+            .alert(alertMessage ?? "", isPresented: Binding(
+                get: { alertMessage != nil },
+                set: { if !$0 { alertMessage = nil } }
+            )) {
+                Button("好") {}
+            }
+        }
+    }
+
+    private func row(for tag: Tag) -> some View {
+        let isOn = selection.contains(tag.persistentModelID)
+        return Button {
+            toggle(tag)
+        } label: {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(tag.color)
+                    .frame(width: 10, height: 10)
+                Text(tag.name)
+                    .foregroundStyle(.primary)
+                Spacer()
+                // 这个标签一共用在多少笔记录上，顺手给个手感
+                Text("\(tag.expenses.count)")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .monospacedDigit()
+                if isOn {
+                    Image(systemName: "checkmark")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+        }
+        // 不加 .plain 的话整行（标签名、次数）会被按钮样式染成主题蓝，看着像链接
+        .buttonStyle(.plain)
+        .swipeActions(edge: .trailing) {
+            if allowsEditing {
+                Button(role: .destructive) {
+                    pendingDelete = tag
+                    showingDelete = true
+                } label: {
+                    Label("删除", systemImage: "trash")
+                }
+                .tint(.red) // App 级 .tint(.blue) 会盖掉 destructive 的红，这里显式覆盖
+
+                Button {
+                    renaming = tag
+                    renameText = tag.name
+                    showingRename = true
+                } label: {
+                    Label("改名", systemImage: "pencil")
+                }
+                .tint(.orange)
+            }
+        }
+    }
+
+    // MARK: - 数据
+
+    private var visibleTags: [Tag] {
+        let key = Tag.comparisonKey(search)
+        guard !key.isEmpty else { return tags }
+        return tags.filter { $0.comparisonKey.contains(key) }
+    }
+
+    /// 搜索词是个尚不存在的标签名时返回它，否则 nil（用来决定要不要显示「新建」）
+    private var pendingNewName: String? {
+        guard allowsEditing else { return nil }
+        let cleaned = Tag.cleanedName(search)
+        guard !cleaned.isEmpty else { return nil }
+        let key = Tag.comparisonKey(cleaned)
+        guard !tags.contains(where: { $0.comparisonKey == key }) else { return nil }
+        return cleaned
+    }
+
+    private func toggle(_ tag: Tag) {
+        let id = tag.persistentModelID
+        if selection.contains(id) {
+            selection.remove(id)
+        } else {
+            selection.insert(id)
+        }
+    }
+
+    private func create(named name: String) {
+        let tag = Tag(
+            name: name,
+            colorIndex: TagPalette.nextIndex(existingCount: tags.count),
+            sortOrder: (tags.map(\.sortOrder).max() ?? 0) + 1
+        )
+        context.insert(tag)
+        // ⚠️ 必须先 save 再取 persistentModelID：没落盘之前拿到的是临时 ID，
+        // 落盘后会被换成永久 ID，早取到的那个就成了对不上的野 ID。
+        try? context.save()
+        selection.insert(tag.persistentModelID)
+        search = ""
+    }
+
+    private func commitRename() {
+        guard let tag = renaming else { return }
+        defer { renaming = nil }
+        let cleaned = Tag.cleanedName(renameText)
+        guard !cleaned.isEmpty else { return }
+        let key = Tag.comparisonKey(cleaned)
+        if tags.contains(where: { $0.comparisonKey == key && $0.persistentModelID != tag.persistentModelID }) {
+            alertMessage = "已经有一个叫「\(cleaned)」的标签了。"
+            return
+        }
+        tag.name = cleaned
+        try? context.save()
+    }
+
+    private func confirmDelete() {
+        guard let tag = pendingDelete else { return }
+        selection.remove(tag.persistentModelID)
+        context.delete(tag)
+        try? context.save()
+        pendingDelete = nil
+    }
+}

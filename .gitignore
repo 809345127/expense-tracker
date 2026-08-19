@@ -1,0 +1,12 @@
+# macOS
+.DS_Store
+
+# Xcode 构建产物与个人状态（不该进版本库）
+build/
+# ⚠️ build-device/ 必须单列：靠 build/ 规则只是碰巧匹配到里面那层同名的 Build/ 子目录，
+#    而这个目录里的描述文件含 Apple ID 邮箱、真实姓名、设备 UDID，不能赌
+build-device/
+DerivedData/
+xcuserdata/
+*.xcuserdatad/
+backups/
