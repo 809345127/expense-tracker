@@ -2,10 +2,13 @@
 .DS_Store
 
 # Xcode 构建产物与个人状态（不该进版本库）
-build/
-# ⚠️ build-device/ 必须单列：靠 build/ 规则只是碰巧匹配到里面那层同名的 Build/ 子目录，
-#    而这个目录里的描述文件含 Apple ID 邮箱、真实姓名、设备 UDID，不能赌
-build-device/
+# ⚠️ 用通配、不要逐个点名。
+#    这里原来只点名了 build/ 和 build-device/ —— 2026-08-24 为了验 Release 随手建了个
+#    build-rel/，它不在名单上，`git status` 里就是 500 个待提交文件（144MB），
+#    里面照样有团队 ID 和私人 Apple ID 邮箱。**逐个点名的名单，迟早漏掉下一个。**
+#    （build-device/ 当初也是这么发现的：靠 build/ 规则碰巧匹配到里面那层同名的 Build/
+#     子目录，而不带 Build 字样的 1978 个文件照样会被提交。）
+build*/
 DerivedData/
 xcuserdata/
 *.xcuserdatad/
