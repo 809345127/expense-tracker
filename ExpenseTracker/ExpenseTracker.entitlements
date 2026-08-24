@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- app 与桌面小组件共享摘要用。免费账号用不了 App Group，只能走钥匙串，
+	     原因见 SharedSummary.swift 顶部的注释。
+
+	     ⚠️ 这里必须写 $(AppIdentifierPrefix) 变量、不能写死团队 ID：
+	     Xcode 在编译时会把它展开成 "<TeamID>."，而这个仓库是公开的，
+	     团队 ID 属于个人身份信息，不该进版本库。 -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)expensetracker.shared</string>
+	</array>
+</dict>
+</plist>

@@ -8,7 +8,9 @@ struct ExpenseFormView: View {
 
     private let editing: Expense?
     @State private var amountText: String
-    @State private var category: ExpenseCategory
+    /// 选中的分类**代号**。存代号不存对象，理由同 ExpenseFilter：
+    /// 托管对象放进 @State 在弹层来回时容易踩生命周期问题
+    @State private var categoryKey: String
     @State private var date: Date
     @State private var note: String
     /// 已选标签只存 ID，真正的 Tag 对象从 allTags 里解析
@@ -22,17 +24,42 @@ struct ExpenseFormView: View {
     @Query(sort: [SortDescriptor(\Tag.sortOrder), SortDescriptor(\Tag.createdAt)])
     private var allTags: [Tag]
 
+    @Query(sort: [SortDescriptor(\CategoryDef.sortOrder), SortDescriptor(\CategoryDef.createdAt)])
+    private var allCategories: [CategoryDef]
+
+    /// 分类管理弹层
+    @State private var showingCategoryManager = false
+
     init(expense: Expense? = nil) {
         editing = expense
         // Decimal 的字符串形式就是 "28.5" 这类纯数字，直接可编辑
         _amountText = State(initialValue: expense.map { "\($0.amount)" } ?? "")
-        _category = State(initialValue: expense?.category ?? .food)
+        // 新建时先留空，等 onAppear 拿到库里的分类列表再落到第一个上
+        // —— init 里读不到 @Query，而分类现在是库里的数据、不是写死的枚举
+        _categoryKey = State(initialValue: expense?.categoryRaw ?? "")
         _date = State(initialValue: expense?.date ?? .now)
         _note = State(initialValue: expense?.note ?? "")
         _selectedTagIDs = State(initialValue: Set((expense?.tags ?? []).map(\.persistentModelID)))
         // 编辑已有记录 → 沿用它自己的。新建 → 先按 false，onAppear 里再看门开没开
         // （init 里读不到 @Environment，只能等视图上屏）
         _isPrivate = State(initialValue: expense?.isPrivate ?? false)
+    }
+
+    /// 实际生效的分类代号。
+    ///
+    /// ⚠️ **不能只靠 `onAppear` 里把 state 补上**（2026-08-24 实测踩到）：
+    /// 分类是库里的数据，`init` 里读不到（`@Query` 那时还没结果），所以新建时 state 初值是空的。
+    /// 原来的写法是在 `onAppear` 里补一个默认值 —— 但九宫格在 `Form` 的**懒加载行**里，
+    /// 那次 state 变化**不一定会让它重画**：实测同一份代码，冷启动那次整排一个都没高亮
+    /// （state 明明已经是「餐饮」），换一次构建又好了。典型的竞态，不能留。
+    ///
+    /// 破法是**不依赖「先渲染、再改 state」这个顺序**：选中态在每次渲染时现算，
+    /// 数据来自 `@Query`，它有值的那一帧结果就是对的。
+    ///
+    /// 顺带把「编辑一笔、而它的分类已经被删掉」这种情况也兜住了：找不到就退到第一个。
+    private var effectiveCategoryKey: String {
+        if allCategories.contains(where: { $0.key == categoryKey }) { return categoryKey }
+        return allCategories.first?.key ?? ""
     }
 
     /// 当前选中的标签，按标签自身的排序显示
@@ -98,13 +125,22 @@ struct ExpenseFormView: View {
                     .onTapGesture { amountFocused = true }
                 }
 
-                Section("分类") {
+                Section {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 14) {
-                        ForEach(ExpenseCategory.allCases) { c in
+                        ForEach(allCategories) { c in
                             categoryCell(c)
                         }
                     }
                     .padding(.vertical, 6)
+                } header: {
+                    HStack {
+                        Text("分类")
+                        Spacer()
+                        // 管理入口放在分组标题右边：它是低频操作，不该跟 10 个高频的分类抢位置
+                        Button("管理") { showingCategoryManager = true }
+                            .font(.caption)
+                            .textCase(nil)
+                    }
                 }
 
                 Section {
@@ -169,7 +205,9 @@ struct ExpenseFormView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("保存") { save() }
                         .fontWeight(.semibold)
-                        .disabled(amount == nil)
+                        // 分类为空也存不了：分类是必填的，而库里理论上不可能一个分类都没有
+                        // （「其他」删不掉），这一条只是防御
+                        .disabled(amount == nil || effectiveCategoryKey.isEmpty)
                 }
             }
             .onAppear {
@@ -181,7 +219,11 @@ struct ExpenseFormView: View {
                 }
                 #if DEBUG
                 if DevFlags.value("-openSheet") == "tags" { showingTagPicker = true }
+                if DevFlags.value("-openSheet") == "categories" { showingCategoryManager = true }
                 #endif
+            }
+            .sheet(isPresented: $showingCategoryManager) {
+                CategoryManagerView()
             }
         }
     }
@@ -199,7 +241,7 @@ struct ExpenseFormView: View {
                     Text("可选")
                         .foregroundStyle(.secondary)
                 } else {
-                    TagChipRow(tags: selectedTags, limit: 2, compact: false)
+                    TagChipRow(tags: selectedTags, limit: nil, compact: false)
                 }
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
@@ -213,13 +255,13 @@ struct ExpenseFormView: View {
         }
     }
 
-    private func categoryCell(_ c: ExpenseCategory) -> some View {
-        let selected = category == c
+    private func categoryCell(_ c: CategoryDef) -> some View {
+        let selected = effectiveCategoryKey == c.key
         return Button {
-            category = c
+            categoryKey = c.key
         } label: {
             VStack(spacing: 6) {
-                Image(systemName: c.icon)
+                Image(systemName: c.iconName)
                     .font(.system(size: 18, weight: .medium))
                     .foregroundStyle(selected ? .white : c.color)
                     .frame(width: 44, height: 44)
@@ -227,9 +269,11 @@ struct ExpenseFormView: View {
                         selected ? c.color : c.color.opacity(0.15),
                         in: RoundedRectangle(cornerRadius: 13, style: .continuous)
                     )
-                Text(c.rawValue)
+                Text(c.name)
                     .font(.caption2)
                     .foregroundStyle(selected ? .primary : .secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
         }
         .buttonStyle(.plain)
@@ -241,13 +285,13 @@ struct ExpenseFormView: View {
         let tags = selectedTags
         if let editing {
             editing.amount = amount
-            editing.category = category
+            editing.categoryRaw = effectiveCategoryKey
             editing.date = date
             editing.note = trimmedNote
             editing.tags = tags
             editing.isPrivate = isPrivate
         } else {
-            let expense = Expense(amount: amount, category: category, note: trimmedNote,
+            let expense = Expense(amount: amount, categoryKey: effectiveCategoryKey, note: trimmedNote,
                                   date: date, isPrivate: isPrivate)
             context.insert(expense)
             // 关系必须在 insert 之后再建，见 Expense.tags 的注释

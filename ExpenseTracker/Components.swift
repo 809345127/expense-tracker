@@ -56,16 +56,25 @@ struct TagChip: View {
 /// —— 不限制的话，几个长标签就能把列表行挤爆
 struct TagChipRow: View {
     let tags: [Tag]
-    var limit: Int = 2
+    /// 最多显示几个胶囊，多出来的收成「+N」。`nil` = 全部显示。
+    /// 表单里用 `nil`：那一行是「我给这笔挂了哪些标签」的答案，
+    /// 收成「+N」会被读成"只能挂 N 个"（用户 2026-08-18 就这么问过）。
+    /// 列表行仍然限量，那里一行要跟金额、备注抢宽度。
+    var limit: Int? = 2
     var compact: Bool = true
+
+    private var shown: [Tag] {
+        guard let limit else { return tags }
+        return Array(tags.prefix(limit))
+    }
 
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(Array(tags.prefix(limit))) { tag in
+            ForEach(shown) { tag in
                 TagChip(tag: tag, compact: compact)
             }
-            if tags.count > limit {
-                Text("+\(tags.count - limit)")
+            if tags.count > shown.count {
+                Text("+\(tags.count - shown.count)")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -74,18 +83,35 @@ struct TagChipRow: View {
     }
 }
 
-/// 分类图标：淡色底的圆角小方块 + 分类色图标
+/// 分类图标：淡色底的圆角小方块 + 分类色图标。
+///
+/// 收的是「图标名 + 颜色」这两个值，而不是一个分类对象 —— 这样它同时能给
+/// 「已有分类」和「正在新建、还没存进库的分类」用（新建界面要实时预览）。
 struct CategoryIcon: View {
-    let category: ExpenseCategory
+    let iconName: String
+    let color: Color
     var size: CGFloat = 40
 
+    init(iconName: String, color: Color, size: CGFloat = 40) {
+        self.iconName = iconName
+        self.color = color
+        self.size = size
+    }
+
+    /// 从库里的分类定义建。`nil`（分类被删了这种意外情况）时退化成一个灰色问号
+    init(_ def: CategoryDef?, size: CGFloat = 40) {
+        self.iconName = def?.iconName ?? CategoryIconLibrary.fallback
+        self.color = def?.color ?? .gray
+        self.size = size
+    }
+
     var body: some View {
-        Image(systemName: category.icon)
+        Image(systemName: iconName)
             .font(.system(size: size * 0.42, weight: .medium))
-            .foregroundStyle(category.color)
+            .foregroundStyle(color)
             .frame(width: size, height: size)
             .background(
-                category.color.opacity(0.15),
+                color.opacity(0.15),
                 in: RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
             )
     }

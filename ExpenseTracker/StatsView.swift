@@ -7,22 +7,31 @@ import UIKit
 
 struct StatsScreen: View {
     @Binding var month: Date
+    /// 点了某一行（分类或标签）时回调给父级：父级负责写筛选条件 + 切到明细 tab。
+    /// 统计页自己不持有筛选状态 —— 它只是「把条件填好」，避免两个页面各存一份。
+    var onDrillDown: (ExpenseFilter) -> Void = { _ in }
 
     var body: some View {
         NavigationStack {
-            StatsContent(month: $month)
+            StatsContent(month: $month, onDrillDown: onDrillDown)
                 .navigationTitle("统计")
         }
     }
 }
 
-/// 单个分类的月度汇总
+/// 单个分类的月度汇总。
+///
+/// ⚠️ 按分类**代号**分组，而不是按分类对象 —— 对象是 SwiftData 的托管实例，
+/// 拿它当字典键要担心身份问题；代号是纯字符串，稳。名字和颜色渲染时再去目录里查。
 private struct CategoryStat: Identifiable {
-    let category: ExpenseCategory
+    let key: String
+    let name: String
+    let iconName: String
+    let color: Color
     let total: Decimal
     let count: Int
     let share: Double // 占比 0~1
-    var id: String { category.id }
+    var id: String { key }
 }
 
 /// 单个标签的月度汇总。tag 为 nil 表示「未打标签」那一行
@@ -38,11 +47,14 @@ private struct TagStat: Identifiable {
 
 private struct StatsContent: View {
     @Binding var month: Date
+    var onDrillDown: (ExpenseFilter) -> Void
     @Environment(PrivacyGate.self) private var gate
+    @Environment(\.categoryCatalog) private var catalog
     @Query private var allExpenses: [Expense]
 
-    init(month: Binding<Date>) {
+    init(month: Binding<Date>, onDrillDown: @escaping (ExpenseFilter) -> Void) {
         _month = month
+        self.onDrillDown = onDrillDown
         let start = month.wrappedValue.startOfMonth
         let end = start.addingMonths(1)
         _allExpenses = Query(filter: #Predicate<Expense> { $0.date >= start && $0.date < end })
@@ -56,12 +68,16 @@ private struct StatsContent: View {
     private var total: Decimal { expenses.reduce(.zero) { $0 + $1.amount } }
 
     private var stats: [CategoryStat] {
-        let grouped = Dictionary(grouping: expenses) { $0.category }
+        let grouped = Dictionary(grouping: expenses) { $0.categoryRaw }
         let totalD = total.asDouble
-        return grouped.map { category, items in
+        return grouped.map { key, items in
             let sum = items.reduce(Decimal.zero) { $0 + $1.amount }
+            let def = catalog.def(forKey: key)
             return CategoryStat(
-                category: category,
+                key: key,
+                name: def?.name ?? key,
+                iconName: def?.iconName ?? CategoryIconLibrary.fallback,
+                color: def?.color ?? .gray,
                 total: sum,
                 count: items.count,
                 share: totalD > 0 ? sum.asDouble / totalD : 0
@@ -186,7 +202,7 @@ private struct StatsContent: View {
                     angularInset: 1.5
                 )
                 .cornerRadius(4)
-                .foregroundStyle(s.category.color.gradient)
+                .foregroundStyle(s.color.gradient)
             }
             .chartLegend(.hidden)
             VStack(spacing: 4) {
@@ -213,6 +229,10 @@ private struct StatsContent: View {
                 .padding(.bottom, 2)
 
             ForEach(tagStats) { s in
+                Button {
+                    // ⚠️「未打标签」那一行没有 tag 可以筛，它不可点（下面 disabled 兜住）
+                    if let tag = s.tag { onDrillDown(.only(tag: tag.persistentModelID)) }
+                } label: {
                 HStack(spacing: 12) {
                     Circle()
                         .fill(s.color)
@@ -228,6 +248,10 @@ private struct StatsContent: View {
                             Text(s.total.yuan)
                                 .font(.subheadline.weight(.semibold))
                                 .monospacedDigit()
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                                .opacity(s.tag == nil ? 0 : 1)   // 占位不跳动
                         }
                         HStack(spacing: 8) {
                             ProgressView(value: s.share)
@@ -241,6 +265,10 @@ private struct StatsContent: View {
                     }
                 }
                 .padding(.vertical, 10)
+                .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)          // 同分类排行：不加会被 App 级蓝色染成链接样
+                .disabled(s.tag == nil)
                 if s.id != tagStats.last?.id {
                     Divider().padding(.leading, 22)
                 }
@@ -258,15 +286,18 @@ private struct StatsContent: View {
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    // 分类排行：图标 + 名称 + 笔数 + 金额 + 占比条
+    // 分类排行：图标 + 名称 + 笔数 + 金额 + 占比条。整行可点 → 下钻到明细
     private var ranking: some View {
         VStack(spacing: 0) {
             ForEach(stats) { s in
+                Button {
+                    onDrillDown(.only(categoryKey: s.key))
+                } label: {
                 HStack(spacing: 12) {
-                    CategoryIcon(category: s.category, size: 36)
+                    CategoryIcon(iconName: s.iconName, color: s.color, size: 36)
                     VStack(alignment: .leading, spacing: 5) {
                         HStack(alignment: .firstTextBaseline) {
-                            Text(s.category.rawValue)
+                            Text(s.name)
                                 .font(.subheadline)
                             Text("\(s.count) 笔")
                                 .font(.caption2)
@@ -275,10 +306,13 @@ private struct StatsContent: View {
                             Text(s.total.yuan)
                                 .font(.subheadline.weight(.semibold))
                                 .monospacedDigit()
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.tertiary)
                         }
                         HStack(spacing: 8) {
                             ProgressView(value: s.share)
-                                .tint(s.category.color)
+                                .tint(s.color)
                             Text("\(Int((s.share * 100).rounded()))%")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
@@ -288,6 +322,11 @@ private struct StatsContent: View {
                     }
                 }
                 .padding(.vertical, 10)
+                .contentShape(Rectangle())   // 空白处也能点，不用非戳在文字上
+                }
+                // ⚠️ 必须 .plain：App 级 .tint(.blue) 会把整行文字染成蓝色、看着像链接。
+                // 判据是「这一行是承载内容的行、还是一个动作按钮」——这里是前者。
+                .buttonStyle(.plain)
                 if s.id != stats.last?.id {
                     Divider().padding(.leading, 48)
                 }

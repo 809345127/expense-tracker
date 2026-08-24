@@ -8,13 +8,15 @@ enum ExpenseCSV {
     static let header = "记账时间,创建时间,金额,分类,备注,标签"
 
     /// 一行一笔。时间用 `2026-08-19 12:18:32`，AI 不用猜格式；标签多个用 `|` 隔开
-    static func make(from expenses: [Expense]) -> String {
+    /// `catalog` 用来把分类代号翻成显示名（分类改过名的话，导出里也要是新名字）。
+    /// 传 nil 就原样写代号 —— 代号本身就是分类当初的名字，认得出
+    static func make(from expenses: [Expense], catalog: CategoryCatalog? = nil) -> String {
         let rows = expenses.map { e in
             [
                 e.date.fullStampTitle,
                 e.createdAt.fullStampTitle,
                 "\(e.amount)",
-                e.category.rawValue,
+                catalog?.name(forKey: e.categoryRaw) ?? e.categoryRaw,
                 e.note,
                 e.tags.map(\.name).joined(separator: "|"),
             ]
@@ -144,6 +146,7 @@ struct ExportSheet: View {
     @Binding var month: Date
     @Environment(\.dismiss) private var dismiss
     @Environment(PrivacyGate.self) private var gate
+    @Environment(\.categoryCatalog) private var catalog
 
     /// 全部记录。范围是「本月」时在内存里再筛一次——跟明细页一样的做法，
     /// 一年几千笔无所谓，也避开了 #Predicate 的那些坑
@@ -181,19 +184,49 @@ struct ExportSheet: View {
 
     // MARK: 长图的尺寸保护
     //
-    // ⚠️ 图的内存 = 宽 × 高 × scale² × 4 字节，高度跟笔数成正比，所以是**平方级**增长。
-    // 一笔大约 70 点高，按 3 倍图算：100 笔 ≈ 70MB，500 笔 ≈ 350MB，1000 笔直接 GB 级
-    // ——渲染当场 OOM 被系统杀掉，用户看到的就是「点一下 app 闪退」。
-    // 「本月」几十笔怎么都没事，但「全部」攒上一两年就会撞上，所以必须有闸。
+    // ⚠️⚠️ **真正卡住这件事的是「一张位图最高 8192 像素」，不是内存。**
+    //
+    // 2026-08-20 二分实测（99 笔、内容高 7488 点）：
+    //   scale 1.09 → 8163 px ✅ 出图
+    //   scale 1.095 → 8199 px ❌ ImageRenderer 直接返回 nil
+    // 8192 = 2^13，是 CoreGraphics / Metal 单张位图的经典上限。
+    //
+    // ⚠️ **它失败得完全无声**：`renderer.uiImage` 返回 nil，不抛错、不崩、不打日志，
+    // 界面上就是「点了生成长图，什么都没发生」。
+    //
+    // 🔎 这个 bug 是怎么潜伏下来的（值得记住的教训）：
+    // 原来的实现按**笔数**挑清晰度（>250 用 1 倍、>100 用 2 倍、否则 3 倍），
+    // 而当初验收时库里只有 **14 笔** —— 3 倍图才 4897 px，远在上限之内，一切正常。
+    // 等账目长到 99 笔，同样的 3 倍图变成 22464 px，直接越界、静默失效。
+    // **「在默认那一档验过」不等于「验过」**：这里真正的自变量是像素高度，
+    // 而笔数只是它的一个间接代理，代理关系随数据量增长就断了。
+    //
+    // 所以现在改成**按渲染出来的真实高度反推清晰度**，不再猜笔数。
 
-    /// 笔数多了就降清晰度换能出图
+    /// 一张位图最高多少像素（实测值，见上面注释）。留一点余量，不贴着边走
+    private static let maxPixelHeight: CGFloat = 8000
+
+    /// 内容在 1 倍下有多高（点）。由 `measureContentHeight()` 在渲染前量出来，
+    /// 量不到时为 0 —— 那种情况按最保守的 1 倍处理
+    @State private var contentHeight: CGFloat = 0
+
+    /// 按真实高度反推能用的最大清晰度，上限 3 倍（再高肉眼也看不出差别，只是更占内存）
     private var imageScale: CGFloat {
-        records.count > 250 ? 1 : (records.count > 100 ? 2 : 3)
+        #if DEBUG
+        if let v = DevFlags.value("-imgScale"), let n = Double(v) { return CGFloat(n) }
+        #endif
+        guard contentHeight > 0 else { return 1 }
+        return max(1, min(3, (Self.maxPixelHeight / contentHeight * 100).rounded(.down) / 100))
     }
 
-    /// 再往上连 1 倍图都扛不住（也超出了图片本身能有多高的实际限制），直接不给渲
-    private static let longImageLimit = 600
-    private var longImageTooBig: Bool { records.count > Self.longImageLimit }
+    /// 连 1 倍都超高，就是真的画不成一张图了 —— 这时要**明确告诉用户**，
+    /// 不能像以前那样悄悄失败
+    private var longImageTooBig: Bool {
+        contentHeight > Self.maxPixelHeight
+    }
+
+    /// 大约还能装多少笔（给提示文案用）。一笔约 70 点
+    private var approxRowCapacity: Int { Int(Self.maxPixelHeight / 70) }
     private var scopeTitle: String { scope == .month ? month.monthTitle : "全部记录" }
 
     /// 文件名。解锁状态下导出的内容含私密记录，名字里带个标记
@@ -230,7 +263,7 @@ struct ExportSheet: View {
                         }
                     }
                     Button {
-                        UIPasteboard.general.string = ExpenseCSV.make(from: records)
+                        UIPasteboard.general.string = ExpenseCSV.make(from: records, catalog: catalog)
                         copied = true
                     } label: {
                         Label(copied ? "已复制到剪贴板" : "复制成文本",
@@ -261,7 +294,7 @@ struct ExportSheet: View {
                     .disabled(rendering || records.isEmpty || longImageTooBig)
 
                     if longImageTooBig {
-                        Label("\(records.count) 笔太多了，一张图装不下（上限 \(Self.longImageLimit) 笔）。改选「本月」，或者用上面的 CSV",
+                        Label("\(records.count) 笔画出来有 \(Int(contentHeight)) 点高，超过了一张图能有的最大高度（约 \(approxRowCapacity) 笔）。改选「本月」，或者用上面的 CSV",
                               systemImage: "exclamationmark.triangle.fill")
                             .font(.caption)
                             .foregroundStyle(.orange)
@@ -314,7 +347,7 @@ struct ExportSheet: View {
     /// ——用错容器只会画出开头一小截，不报错、不崩，不数一遍根本看不出来。
     private func dumpForVerification() async {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        try? Data(ExpenseCSV.make(from: records).utf8)
+        try? Data(ExpenseCSV.make(from: records, catalog: catalog).utf8)
             .write(to: docs.appendingPathComponent("dump.csv"))
         await renderLongImage()
         if let png = longImage?.pngData() {
@@ -329,20 +362,39 @@ struct ExportSheet: View {
         csvFile = records.isEmpty ? nil : ExpenseCSV.writeTempFile(records, named: baseName)
     }
 
+    /// 渲染之前先量一次内容有多高。
+    /// `ImageRenderer.render` 的回调会把内容尺寸交给你，而且**不会真的生成位图**
+    /// —— 所以量高度这一步不受 8192 上限影响，可以放心先量再决定清晰度。
     @MainActor
-    private func renderLongImage() async {
-        guard !longImageTooBig else { return }
-        rendering = true
-        defer { rendering = false }
+    private func measureContentHeight() {
+        let renderer = ImageRenderer(content: longImageContent(stamp: ""))
+        renderer.scale = 1
+        renderer.render { size, _ in contentHeight = size.height }
+    }
 
-        let stamp = Date.now.fullStampTitle
-        let view = ExportImageView(
+    private func longImageContent(stamp: String) -> some View {
+        ExportImageView(
             title: scopeTitle,
             total: total,
             count: records.count,
             days: records.groupedByDay(),
             footer: "记账本 · 导出于 \(stamp)"
         )
+        // ⚠️ **必须显式把分类目录塞进去**。`ImageRenderer` 渲的视图是脱离视图树的，
+        // 拿不到我们在根部注入的 environment —— 不补这一句，图里每行的分类图标会变成
+        // 灰问号、分类名退回成内部代号。跟下面固定浅色是同一个道理（同一个坑的两个面）。
+        .environment(\.categoryCatalog, catalog)
+    }
+
+    @MainActor
+    private func renderLongImage() async {
+        measureContentHeight()
+        guard !longImageTooBig else { return }
+        rendering = true
+        defer { rendering = false }
+
+        let stamp = Date.now.fullStampTitle
+        let view = longImageContent(stamp: stamp)
 
         // 固定浅色：导出的图要发给别人、要存档，不该跟着你当时是不是深色模式变。
         // ImageRenderer 渲的视图是脱离环境的，不显式指定的话取默认值——这里写死才有保证

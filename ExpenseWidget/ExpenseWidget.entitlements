@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 必须跟主 app 那份写成完全一样的组，否则两边各写各的、读不到对方。
+	     同样用 $(AppIdentifierPrefix) 变量，不写死团队 ID（公开仓）。 -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)expensetracker.shared</string>
+	</array>
+</dict>
+</plist>

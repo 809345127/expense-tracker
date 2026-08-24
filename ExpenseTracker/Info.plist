@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 桌面小组件点一下要能直接跳进「记一笔」，靠的是自定义 URL scheme。
+	     ⚠️ 这个键没法用 INFOPLIST_KEY_ 那套构建设置表达，只能给一份真的 Info.plist；
+	     GENERATE_INFOPLIST_FILE 仍然是 YES，Xcode 会把这份和它自动生成的那些合并。 -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.shize.ExpenseTracker</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>expensetracker</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

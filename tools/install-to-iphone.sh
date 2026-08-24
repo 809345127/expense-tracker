@@ -48,13 +48,57 @@ echo "▸ 3/6 检查签名要不要换新的"
 # 判断标准用「剩余不足 5 天就换」：免费账号一份签名只有 7 天，续期又必须插线，
 # 留 2 天余量才不至于「刚跑完脚本、隔天出门就打不开」。
 PROFILE_DIR="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+BUNDLE_ID=com.shize.ExpenseTracker
+
+# 挑出「这个 app 及其扩展」的所有描述文件。
+# ⚠️ 不能用 `ls -t | head -1`（取最新那份）：本机只要因为别的原因多出一份描述文件
+# （2026-08-20 就因为拿另一个 bundle id 做实验多出来一份），"最新"就会指错，
+# 于是脚本读的是别人的到期时间 —— 判成「还够用、不用换」，真正的签名到期那天照样打不开。
+# 这正是坑 C1 那个失败模式，只是触发路径换了个。
+# ⚠️ 装了桌面小组件之后，这个 app 有**两份**描述文件：
+#   com.shize.ExpenseTracker        （主 app）
+#   com.shize.ExpenseTracker.Widget （小组件扩展）
+# 两份到期时间不一样（申请时间差了几小时）。判「要不要续」必须看**最早到期的那一份**，
+# 续的时候也要**两份一起删**，否则会出现「app 续到 8/31、小组件 8/27 就过期」——
+# 而扩展的描述文件一过期，整个 app 都可能装不上或打不开。
+#
+# 匹配规则：bundle id 等于主 id，或者以「主 id.」开头（扩展都是这个形状）。
+list_profiles () {
+    local want=$1
+    for f in "$PROFILE_DIR"/*.mobileprovision; do
+        [ -e "$f" ] || continue
+        local info
+        info=$(security cms -D -i "$f" 2>/dev/null | python3 -c "
+import sys, plistlib
+try:
+    d = plistlib.loads(sys.stdin.buffer.read())
+except Exception:
+    raise SystemExit
+app = d['Entitlements'].get('application-identifier', '')
+print(app.split('.', 1)[-1], int(d['ExpirationDate'].timestamp()))
+" 2>/dev/null)
+        [ -z "$info" ] && continue
+        local bid exp
+        bid=$(echo "$info" | awk '{print $1}')
+        exp=$(echo "$info" | awk '{print $2}')
+        case "$bid" in
+            "$want"|"$want".*) echo "$exp|$f" ;;
+        esac
+    done
+}
+
+# 最早到期的那一份（判「还剩几天」用它，宁可早续也不能晚）
+find_profile () {
+    list_profiles "$1" | sort -t'|' -k1,1n | head -1 | cut -d'|' -f2-
+}
+
 # 可以用环境变量顶掉，比如想「明明还剩 5 天但趁手机在手边就把签名续掉」：
 #   RENEW_THRESHOLD_DAYS=99 ./tools/install-to-iphone.sh
 # 走这条路的好处是复用下面那套「先备份旧描述文件、申请失败就还原」的逻辑，
 # 而不是自己手动删文件——手动删一旦申请失败就没有兜底了。
 RENEW_THRESHOLD_DAYS=${RENEW_THRESHOLD_DAYS:-5}
 NEED_RENEW=no
-CURRENT_PROFILE=$(ls -t "$PROFILE_DIR"/*.mobileprovision 2>/dev/null | head -1)
+CURRENT_PROFILE=$(find_profile "$BUNDLE_ID")
 
 if [ -z "$CURRENT_PROFILE" ]; then
     echo "  本地还没有描述文件，这次会新申请一份"
@@ -82,10 +126,13 @@ if [ "$NEED_RENEW" = yes ]; then
     # 先备份再删：万一苹果那边申请失败（没网、要重新登录），还能还原回去
     PROFILE_BACKUP="$PROJ_DIR/backups/profiles-$(date +%Y%m%d-%H%M%S)"
     mkdir -p "$PROFILE_BACKUP"
-    cp "$PROFILE_DIR"/*.mobileprovision "$PROFILE_BACKUP/" 2>/dev/null \
-        && echo "  旧描述文件已备份到 $PROFILE_BACKUP"
-    rm -f "$PROFILE_DIR"/*.mobileprovision
-    echo "  已删掉本地旧描述文件，下一步会重新申请"
+    # 主 app 和小组件的都要备份 + 删掉，两份一起重新申请
+    list_profiles "$BUNDLE_ID" | cut -d'|' -f2- | while read -r p; do
+        cp "$p" "$PROFILE_BACKUP/" 2>/dev/null && echo "  已备份 $(basename "$p")"
+    done
+    # ⚠️ 只删这个 app 及其扩展的，别把目录里别人的描述文件一起清掉
+    list_profiles "$BUNDLE_ID" | cut -d'|' -f2- | while read -r p; do rm -f "$p"; done
+    echo "  已删掉本地旧描述文件（含小组件那份），下一步会重新申请"
 fi
 
 echo "▸ 4/6 编译并签名（要向苹果申请描述文件，可能要几十秒）"
@@ -142,7 +189,8 @@ echo ""
 echo "✓ 装好了。手机桌面上找「记账本」。"
 
 # 把这次签名的实际到期时间打出来，「到底续上了没有」不靠猜
-FINAL_PROFILE=$(ls -t "$PROFILE_DIR"/*.mobileprovision 2>/dev/null | head -1)
+# 收尾同样看最早到期的那一份
+FINAL_PROFILE=$(find_profile "$BUNDLE_ID")
 if [ -n "$FINAL_PROFILE" ]; then
     security cms -D -i "$FINAL_PROFILE" 2>/dev/null | python3 -c "
 import sys, plistlib, datetime

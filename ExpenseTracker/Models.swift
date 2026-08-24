@@ -25,24 +25,23 @@ final class Expense {
     /// 否则关系可能建不上。统一在插入之后 `expense.tags = [...]`。
     var tags: [Tag] = []
 
-    init(amount: Decimal, category: ExpenseCategory, note: String = "",
+    init(amount: Decimal, categoryKey: String, note: String = "",
          date: Date = .now, isPrivate: Bool = false) {
         self.amount = amount
-        self.categoryRaw = category.rawValue
+        self.categoryRaw = categoryKey
         self.note = note
         self.date = date
         self.createdAt = .now
         self.isPrivate = isPrivate
     }
 
-    var category: ExpenseCategory {
-        get { ExpenseCategory(rawValue: categoryRaw) ?? .other }
-        set { categoryRaw = newValue.rawValue }
-    }
-
-    /// 列表行主标题：有备注显示备注，否则显示分类名
-    var title: String {
-        note.isEmpty ? category.rawValue : note
+    /// 列表行主标题：有备注显示备注，否则显示分类名。
+    ///
+    /// ⚠️ 分类**改名之后**这里要显示新名字，而 `categoryRaw` 存的是不变的代号，
+    /// 所以名字得去 `CategoryCatalog` 里查 —— 而 `@Model` 拿不到视图层的 environment。
+    /// 因此没有备注时由调用方把名字传进来；传不进来才退回显示代号（至少还认得出是什么）。
+    func title(categoryName: String? = nil) -> String {
+        note.isEmpty ? (categoryName ?? categoryRaw) : note
     }
 }
 
@@ -119,12 +118,94 @@ enum TagPalette {
     static func nextIndex(existingCount: Int) -> Int { existingCount % colors.count }
 }
 
+// MARK: - 筛选条件（分类 + 标签，全 app 只有这一套）
+//
+// ⚠️ 分类和标签是**同一个筛选器的两个维度**，不是两套机制。
+// 不管你是在明细页的筛选面板里选的，还是在统计页点某一行进来的，
+// 落到的都是这一个 `ExpenseFilter` —— 所以不会出现「两种筛选态」。
+//
+// 口径（这三条是刻意选的，改之前先想清楚）：
+// 1. **分类之间是「或」**：选了餐饮 + 交通，两类都算。跟标签一致。
+// 2. **分类和标签之间是「且」**：既要是餐饮、又要带「咖啡」标签。
+//    因为这两个维度回答的是不同问题（钱花在什么事上 / 属于哪次活动），叠加才有意义。
+// 3. **一笔记录只算一次钱**：多个标签同时命中同一笔，也只计入一次。
+//    实现上是「按记录过滤」而不是「按维度遍历累加」，去重是免费的。
+struct ExpenseFilter: Equatable {
+    /// 存的是分类**代号**（`CategoryDef.key` / `Expense.categoryRaw`），不是显示名。
+    ///
+    /// ⚠️ 为什么不存 `CategoryDef` 对象：那是 SwiftData 的托管对象，跨界面传递、
+    /// 放进 `@State` 都要小心生命周期；而代号是个纯字符串，改名不影响它、
+    /// 删掉分类之后残留在筛选条件里也只是筛不出东西，不会崩。
+    var categoryKeys: Set<String> = []
+    var tagIDs: Set<PersistentIdentifier> = []
+
+    var isEmpty: Bool { categoryKeys.isEmpty && tagIDs.isEmpty }
+
+    /// 顶部卡片那行说明文字。分类用名字直接列出来（十来个，列得下）
+    var summary: String {
+        var parts: [String] = []
+        if !categoryKeys.isEmpty {
+            // 名字只有视图层查得到（代号本身不带名字），同 tagNames，由调用方填进来。
+            // 填不上就退回显示代号 —— 代号就是分类当初的名字，看得懂
+            let names = categoryNames.isEmpty
+                ? categoryKeys.sorted()
+                : categoryNames
+            parts.append(names.joined(separator: "、"))
+        }
+        if !tagIDs.isEmpty {
+            // 标签名比「N 个标签」有用得多；多到列不下才退回计数
+            let names = tagNames.filter { !$0.isEmpty }
+            parts.append(names.count == tagIDs.count && names.count <= 3
+                         ? names.joined(separator: "、")
+                         : "\(tagIDs.count) 个标签")
+        }
+        return parts.joined(separator: " + ")
+    }
+
+    /// 标签名只有视图层查得到（`PersistentIdentifier` 本身不带名字），由调用方填进来。
+    /// 填不上就自动退回显示「N 个标签」，不会因此崩或者显示空白。
+    var tagNames: [String] = []
+
+    /// 分类名同理，由调用方按 `categoryKeys` 的顺序填进来（见 `summary`）
+    var categoryNames: [String] = []
+
+    mutating func toggle(categoryKey key: String) {
+        if categoryKeys.contains(key) { categoryKeys.remove(key) }
+        else { categoryKeys.insert(key) }
+    }
+
+    mutating func clear() { categoryKeys = []; tagIDs = [] }
+
+    /// 统计页点某一行时用：把条件换成「只看这一个分类」，而不是往上叠加。
+    /// 点第二个分类应该是「改看那个」，不是「两个都要」——要两个都要就去筛选面板里选。
+    static func only(categoryKey key: String) -> ExpenseFilter {
+        ExpenseFilter(categoryKeys: [key])
+    }
+
+    static func only(tag id: PersistentIdentifier) -> ExpenseFilter {
+        ExpenseFilter(tagIDs: [id])
+    }
+}
+
 // MARK: - 按标签筛选与汇总
 //
 // 核心规则：**一笔记录只算一次钱**。
 // 选中多个标签时，同一笔被其中好几个标签同时命中，也只计入一次
 // —— 所以这里是「按记录过滤」，而不是「按标签遍历累加」，去重是免费的。
 extension Array where Element == Expense {
+    /// 按筛选条件过滤。分类内部取并集、标签内部取并集、两者之间取交集。
+    /// ⚠️ 调用方必须**先**过 `visible(unlocked:)` 再调这个，顺序不能反
+    /// —— 私密门是最外层，任何筛选都不能把被藏起来的记录放出来。
+    func matching(_ filter: ExpenseFilter) -> [Expense] {
+        matchingAny(categoryKeys: filter.categoryKeys).matchingAny(of: filter.tagIDs)
+    }
+
+    /// 命中任意一个给定分类的记录。传空集合表示不筛选，原样返回
+    func matchingAny(categoryKeys keys: Set<String>) -> [Expense] {
+        guard !keys.isEmpty else { return self }
+        return filter { keys.contains($0.categoryRaw) }
+    }
+
     /// 命中任意一个给定标签的记录。传空集合表示不筛选，原样返回
     func matchingAny(of tagIDs: Set<PersistentIdentifier>) -> [Expense] {
         guard !tagIDs.isEmpty else { return self }
@@ -161,53 +242,11 @@ extension Array where Element == Expense {
     }
 }
 
-// MARK: - 分类（颜色取 iOS 系统色板，和原型一致）
-
-enum ExpenseCategory: String, CaseIterable, Identifiable {
-    case food = "餐饮"
-    case transport = "交通"
-    case shopping = "购物"
-    case housing = "居住"
-    case entertainment = "娱乐"
-    case medical = "医疗"
-    case education = "学习"
-    case social = "人情"
-    case subscription = "订阅"
-    case other = "其他"
-
-    var id: String { rawValue }
-
-    /// SF Symbols 图标名（系统自带矢量图标库）
-    var icon: String {
-        switch self {
-        case .food: "fork.knife"
-        case .transport: "tram.fill"
-        case .shopping: "bag.fill"
-        case .housing: "house.fill"
-        case .entertainment: "gamecontroller.fill"
-        case .medical: "cross.case.fill"
-        case .education: "book.fill"
-        case .social: "gift.fill"
-        case .subscription: "arrow.triangle.2.circlepath"
-        case .other: "ellipsis.circle.fill"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .food: .orange
-        case .transport: .blue
-        case .shopping: .pink
-        case .housing: .brown
-        case .entertainment: .purple
-        case .medical: .red
-        case .education: .indigo
-        case .social: .mint
-        case .subscription: .cyan
-        case .other: .gray
-        }
-    }
-}
+// MARK: - 分类
+//
+// 分类原来是写死在这里的一个 10 个 case 的枚举。2026-08-24 改成一张可增删改的表，
+// 定义搬去 `Category.swift`（连同为什么「代号」和「显示名」要拆开的完整说明）。
+// `Expense.categoryRaw` 存的仍然是那个不变的代号，所以历史账目一个字节都没动。
 
 // MARK: - 主题
 
