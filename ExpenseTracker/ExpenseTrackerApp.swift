@@ -149,13 +149,29 @@ struct RootView: View {
         _month = State(initialValue: Date.now.startOfMonth)
     }
 
-    /// 桌面小组件点一下 → `expensetracker://add` → 直接弹「记一笔」。
+    /// 桌面小组件点一下的落点。**两个 host 对应小组件上两个不同的地方**：
+    ///
+    /// | URL | 从哪点出来的 | 落到哪 |
+    /// |---|---|---|
+    /// | `expensetracker://add` | 中号右上角那颗 `+`（小号是整块） | 直接弹「记一笔」 |
+    /// | `expensetracker://home` | 中号除了那颗 `+` 以外的任何地方 | 明细页，不弹任何东西 |
+    ///
+    /// ⚠️ `home` 要**显式关掉弹层 + 切回明细 tab**，不能什么都不做。
+    /// 什么都不做的话，上次带着「记一笔」切走、这次点空白处回来，看到的还是那个弹层
+    /// —— 而这恰好就是当初要修的症状（「点哪都是记账」）。
+    /// 代价是万一表单里有半截没存的输入会被关掉；这是选过的：点本体的语义就是
+    /// 「带我去主页面」，而一笔账本来就是几秒钟输完的，留在后台的大概率是放弃了的那笔。
+    ///
     /// ⚠️ scheme 注册在 ExpenseTracker/Info.plist 里，删了这里就永远收不到回调。
     /// ⚠️ 判 host 不判整串：URL 以后可能带 query（比如「记某个分类」），
     ///    用 == 全等匹配会在那天悄悄失效。
     private func handleDeepLink(_ url: URL) {
         guard url.scheme == "expensetracker" else { return }
-        if url.host() == "add" { showingAdd = true }
+        switch url.host() {
+        case "add":  showingAdd = true
+        case "home": showingAdd = false; tab = .list
+        default:     break
+        }
     }
 
     var body: some View {
@@ -175,10 +191,7 @@ struct RootView: View {
         // ⚠️ 挂在 TabView 上而不是某一页里：两个 tab 都能记一笔，不用先切回明细页
         .modifier(AddEntryAccessory { showingAdd = true })
         .sheet(isPresented: $showingAdd) { ExpenseFormView() }
-        // 桌面小组件点一下 → expensetracker://add → 直接弹「记一笔」。
-        // ⚠️ scheme 注册在 ExpenseTracker/Info.plist 里，删了这里就永远收不到回调。
-        // ⚠️ 判 host 不判整串：URL 可能带 query（以后加「记某个分类」时会用到），
-        //    用 == 全等匹配会在那天悄悄失效。
+        // 桌面小组件点一下：add → 弹「记一笔」，home → 明细页。见 handleDeepLink 上面那张表
         .onOpenURL { handleDeepLink($0) }
         #if DEBUG
         // -deepLink expensetracker://add：走跟真实点击**完全同一段**处理逻辑。

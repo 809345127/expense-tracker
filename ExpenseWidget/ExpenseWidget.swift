@@ -68,13 +68,7 @@ struct ExpenseWidgetView: View {
                     .monospacedDigit()
                 // 中号才放独立按钮：⚠️ 小号尺寸上系统只认 .widgetURL，
                 // Link 在那儿是被忽略的 —— 所以小号靠「整块可点」，见下面的 widgetURL。
-                if family != .systemSmall {
-                    Link(destination: addURL) {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.title3)
-                            .foregroundStyle(.tint)
-                    }
-                }
+                if family != .systemSmall { addButton }
             }
             Text(yuan(s.total))
                 .font(.system(size: family == .systemSmall ? 24 : 30,
@@ -98,15 +92,56 @@ struct ExpenseWidgetView: View {
             }
             Spacer(minLength: 0)
         }
-        // 整块可点 → 也直接进「记一笔」。
-        // 小号尺寸只有这一条路（Link 在小号上无效），中号则是「点空白处也进记一笔、
-        // 点右上角那颗 + 同样进记一笔」——两条路目的地一致，不会让人点错。
-        .widgetURL(addURL)
+        // 整块可点。**两个尺寸的目的地故意不一样**，因为平台能力不一样：
+        //
+        // · 中号：点右上角那颗 + 才记一笔，点其它任何地方 → 进 app 主页面（明细页）。
+        //   「记一笔」这个动作只归那颗按钮，别处点不出来。
+        // · 小号：整块 → 记一笔。⚠️ 不是没统一，是**统一不了**：Link 在小号上被系统
+        //   忽略，小号只认 widgetURL 这一个目的地，摆颗 + 上去也点不动（点它等于点整块）。
+        //   所以小号只能二选一，选了保留「一点就记账」这个快捷方式 —— 否则小号就只剩
+        //   「打开 app」这一件事，跟直接点桌面图标没区别了。
+        .widgetURL(family == .systemSmall ? addURL : homeURL)
+    }
+
+    /// 右上角那颗「记一笔」。**做成实心胶囊 + 带字，不是一枚裸图标**，两个原因：
+    ///
+    /// ① **点它和点它旁边现在是两个不同的去处**（点它记一笔、点别处进 app）。
+    ///    裸的 `plus.circle.fill` 连图标带笔画才 20 多 pt，差几个 pt 就会
+    ///    「明明点的是 +、却进了主页面」—— 那看起来就是功能坏了，而不是手指偏了。
+    /// ② 顺带把这条新规矩说明白：桌面上看一眼就知道「记账要点这颗」，
+    ///    不用记「哪里能点、哪里不能点」。
+    ///
+    /// 尺寸是这么配平的：**视觉高度不许涨、命中区要涨**。中号的高度本来就只剩一两 pt
+    /// 余量（下面紧跟着三行分类排行），行高一涨就把内容挤掉；所以垂直方向用
+    /// 「透明 padding 撑命中区 + 外层负 padding 把空间还给排版」，
+    /// 视觉上一动没动、手指能碰到的范围高了一倍。
+    /// ⚠️ `contentShape` 少不了：padding 撑出来的是透明留白，不声明形状的话点在留白上不算命中。
+    private var addButton: some View {
+        Link(destination: addURL) {
+            HStack(spacing: 3) {
+                Image(systemName: "plus").font(.caption.weight(.bold))
+                Text("记一笔").font(.caption.weight(.semibold))
+                    .lineLimit(1).minimumScaleFactor(0.8)   // 系统字号拉到最大时缩一点，别把胶囊撑爆
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(.tint))
+            .padding(.vertical, 7)          // ← 只撑命中区（透明），不是视觉留白
+            .contentShape(Rectangle())
+        }
+        .padding(.vertical, -7)             // ← 把上面撑出来的 7pt 还给排版
     }
 
     /// ⚠️ scheme 必须和主 app 的 Info.plist 里注册的那个一字不差，
     /// 否则点了只会打开 app 停在明细页 —— 而且不报任何错，很难发现
     private var addURL: URL { URL(string: "expensetracker://add")! }
+
+    /// 点小组件本体 → 只是把 app 打开、停在明细页，不弹「记一笔」。
+    /// ⚠️ 这里必须是一个**显式**的 URL、并且在 app 那边真的处理它，不能图省事把
+    /// `.widgetURL` 整个去掉：去掉之后点一下只是「把 app 调到前台」，如果上次是
+    /// 带着「记一笔」弹层切走的，回来还停在那个弹层上 —— 症状跟没改一模一样。
+    private var homeURL: URL { URL(string: "expensetracker://home")! }
 
     private func yuan(_ v: Decimal) -> String {
         let f = NumberFormatter()
