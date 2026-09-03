@@ -1,0 +1,9 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- 自适应图标里只有中间 66x66 那块是一定看得见的，所以图形要缩在中间 -->
+    <group android:translateX="27" android:translateY="27">
+        <path android:fillColor="#FFFFFF"
+            android:pathData="M27,10 L27,10 L38,10 L27.5,29 L34,29 L34,34 L26,34 L26,38 L34,38 L34,43 L26,43 L26,50 L20,50 L20,43 L12,43 L12,38 L20,38 L20,34 L12,34 L12,29 L18.5,29 L8,10 L19,10 L23,19 Z" />
+    </group>
+</vector>

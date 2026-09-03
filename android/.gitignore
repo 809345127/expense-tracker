@@ -1,0 +1,9 @@
+# 构建产物
+build/
+.gradle/
+local.properties
+
+# 🚨 签名和凭证，绝对不能进公开仓
+keystore.jks
+*.jks
+*.keystore

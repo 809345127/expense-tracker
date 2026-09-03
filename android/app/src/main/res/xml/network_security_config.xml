@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  允许明文 HTTP。Android 9（API 28）起默认禁止明文，不开这个开关同步会直接失败。
+
+  ⚠️ 为什么是「全局允许」而不是「只允许我那台服务器」：
+  只允许某个主机的话就得把服务器地址写进这个 XML，而这个仓库是公开的、
+  那台 VPS 上还跑着别的东西，IP 不该落进公开仓。
+  这个 app 只往设置页里配的那一个地址发请求，所以放宽这个开关的实际风险很小。
+
+  以后同步服务上了 HTTPS，把这个文件删掉、清单里那行 networkSecurityConfig 也删掉。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

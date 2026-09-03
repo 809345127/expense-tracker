@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  纯 Compose 的 app，这个 XML 主题只负责**窗口本身**（启动那一瞬间的背景、有没有标题栏）。
+  颜色和排版全在 Compose 那边的 Theme.kt 里。
+
+  ⚠️ 不引 AppCompat / Material Components 那两个 XML 库，所以只能用**框架自带**的主题。
+     踩过的：`android:Theme.Material.DayNight.*` **不存在** —— DayNight 变体是 AppCompat 和
+     Material Components 提供的，框架里跟随系统深浅色的是 `Theme.DeviceDefault.DayNight`（API 29+）。
+  ⚠️ 也不设 statusBarColor / navigationBarColor：那两个属性在 API 35+ 已经废弃
+     （系统强制全屏铺满），状态栏这些交给 Activity 里的 enableEdgeToEdge() 和 Compose 处理。
+-->
+<resources>
+    <style name="Theme.App" parent="android:Theme.DeviceDefault.DayNight">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
+</resources>
