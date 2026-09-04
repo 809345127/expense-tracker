@@ -27,6 +27,7 @@ datastore = "1.2.1"
 # 我第一版凭记忆写了 1.4.0，那个版本不存在，构建直接失败。
 # 教训：版本号一个都不许凭记忆写，全都去查 maven-metadata。
 biometric = "1.1.0"
+junit = "4.13.2"
 
 [libraries]
 compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
@@ -34,6 +35,13 @@ compose-ui = { group = "androidx.compose.ui", name = "ui" }
 compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+# ⚠️ 图标是**单独的库**，material3 压根不带（我一开始以为带、结果 Icons 整个包找不到）。
+# 这两个的版本由 BOM 管（BOM 2026.06.01 里锁的是 1.7.8 —— 它们最后一个版本，
+# 已经不再更新了，但仍在 Compose 的发布列车里、BOM 会管好版本）。
+# extended 有两千多个图标、体积大，但那些图标是代码（ImageVector 构造），
+# release 构建时 R8 会把没用到的摇掉；debug 包大一点无所谓。
+compose-material-icons-core = { group = "androidx.compose.material", name = "material-icons-core" }
+compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
 activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
 lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
@@ -50,6 +58,9 @@ okhttp-logging = { group = "com.squareup.okhttp3", name = "logging-interceptor",
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serialization" }
 datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
+# 单元测试。用 JUnit4 而不是 5：AGP 的默认测试运行器就是 JUnit4，
+# 用 5 还要多配一个 platform，而这里只要跑几个纯函数断言
+junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

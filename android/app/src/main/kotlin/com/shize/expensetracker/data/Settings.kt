@@ -1,6 +1,7 @@
 package com.shize.expensetracker.data
 
 import android.content.Context
+import com.shize.expensetracker.BuildConfig
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -23,8 +24,15 @@ class Settings(private val context: Context) {
         val lastError = stringPreferencesKey("last_error")
     }
 
-    val url: Flow<String> = context.store.data.map { it[Keys.url] ?: "" }
-    val token: Flow<String> = context.store.data.map { it[Keys.token] ?: "" }
+    // ⚠️ 没设过就退回 BuildConfig 里的开发期默认值（从 local.properties 读，那个文件已 gitignore）。
+    // 为什么需要这条路：这台开发机点不了手机屏幕，而 token 是 64 位随机串 ——
+    // 装到模拟器/真机上之后没法替用户在界面里粘。设置页里改过一次之后就以设置页为准。
+    val url: Flow<String> = context.store.data.map {
+        it[Keys.url] ?: BuildConfig.DEFAULT_SYNC_URL.normalizedBase()
+    }
+    val token: Flow<String> = context.store.data.map {
+        it[Keys.token] ?: BuildConfig.DEFAULT_SYNC_TOKEN
+    }
     val lastSyncAt: Flow<Long> = context.store.data.map { it[Keys.lastSyncAt] ?: 0L }
     val lastError: Flow<String> = context.store.data.map { it[Keys.lastError] ?: "" }
 
@@ -36,7 +44,7 @@ class Settings(private val context: Context) {
         context.store.edit {
             // 末尾的斜杠 Retrofit 要求有，用户粘的时候大概率不会带 —— 这里补上，
             // 不然是一个「地址看着完全正确、请求却 404」的坑
-            it[Keys.url] = url.trim().trimEnd('/') + "/"
+            it[Keys.url] = url.normalizedBase()
             it[Keys.token] = token.trim()
         }
     }
@@ -56,4 +64,13 @@ class Settings(private val context: Context) {
 
     /// 重置本地游标：下次同步会从头拉一遍（排障用）
     suspend fun resetCursor() = context.store.edit { it[Keys.lastRev] = 0L }.let {}
+}
+
+/// 地址统一成「末尾一个斜杠」。
+/// ⚠️ Retrofit 的 baseUrl 必须以斜杠结尾，而用户粘地址时大概率不带 ——
+/// 不补的话拼出来的路径少一层，症状是「地址看着完全对、请求却 404」。
+/// 空串保持空串（空串表示"还没配"，不能变成 "/"）。
+internal fun String.normalizedBase(): String {
+    val t = trim().trimEnd('/')
+    return if (t.isEmpty()) "" else "$t/"
 }

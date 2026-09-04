@@ -102,9 +102,11 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
-    // ⚠️ 没有引 material-icons-extended：那个包停更在 1.7.8、已被弃用（而且体积巨大，
-    // 两千多个图标全打进包里）。Material 3 自带的核心图标集够用，
-    // 分类图标本来也需要一张「iOS 的 SF Symbols 名 → 安卓图标」的映射表，缺的自己画矢量图。
+    // ⚠️ 图标必须单独引 —— **material3 不带图标**（我第一版以为带、把这两个去掉了，
+    // 结果 `androidx.compose.material.icons` 整个包找不到，编译直接失败）。
+    // 版本由 BOM 管（现在锁在 1.7.8，是这两个库最后一个版本、不再更新，但 BOM 仍然管着它们）。
+    implementation(libs.compose.material.icons.core)
+    implementation(libs.compose.material.icons.extended)
     debugImplementation(libs.compose.ui.tooling)
 
     implementation(libs.activity.compose)
@@ -129,6 +131,8 @@ dependencies {
     implementation(libs.retrofit.serialization)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp.logging)
+
+    testImplementation(libs.junit)
 
     implementation(libs.datastore.preferences)
     // 指纹/人脸解锁，对位 iOS 那边的 Face ID 门
