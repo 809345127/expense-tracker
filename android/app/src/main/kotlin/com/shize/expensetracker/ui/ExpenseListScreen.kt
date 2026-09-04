@@ -30,25 +30,55 @@ import java.math.BigDecimal
 @Composable
 fun ExpenseListScreen(
     onOpenSync: () -> Unit,
+    onOpenCategories: () -> Unit,
+    onOpenExport: () -> Unit,
+    onToggleLock: () -> Unit,
     onAdd: () -> Unit,
     onEdit: (ExpenseEntity) -> Unit,
+    bottomBar: @Composable () -> Unit,
     vm: ExpenseListViewModel = viewModel(),
 ) {
     val month by vm.month.collectAsStateWithLifecycle()
+    val unlocked by vm.unlocked.collectAsStateWithLifecycle()
     val expenses by vm.expenses.collectAsStateWithLifecycle()
     val categories by vm.categories.collectAsStateWithLifecycle()
     val catByKey = remember(categories) { categories.associateBy { it.id } }
     val total = remember(expenses) { expenses.map { it.amount }.sum() }
+    var menuOpen by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("记账本") },
                 actions = {
+                    // 私密门。⚠️ 图标本身就是状态指示：开着的锁 = 私密记录正显示着。
+                    // 不加任何文字说明 —— 界面上写「私密模式已开启」等于告诉旁边的人这儿有东西
+                    IconButton(onClick = onToggleLock) {
+                        Icon(
+                            if (unlocked) Icons.Filled.LockOpen else Icons.Filled.Lock,
+                            contentDescription = if (unlocked) "锁上私密记录" else "解锁私密记录",
+                        )
+                    }
                     IconButton(onClick = onOpenSync) { Icon(Icons.Filled.CloudSync, "同步") }
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Filled.MoreVert, "更多")
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("分类管理") },
+                            leadingIcon = { Icon(Icons.Filled.Category, null) },
+                            onClick = { menuOpen = false; onOpenCategories() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("导出") },
+                            leadingIcon = { Icon(Icons.Filled.IosShare, null) },
+                            onClick = { menuOpen = false; onOpenExport() },
+                        )
+                    }
                 },
             )
         },
+        bottomBar = bottomBar,
         floatingActionButton = {
             // 安卓这边用 FAB 是**对的**（Material 自家的模式）；
             // iOS 那边刻意没用（Apple HIG 里没有悬浮按钮，而且实测会压住 tab 栏）。
@@ -106,7 +136,7 @@ fun ExpenseListScreen(
                 }
             }
 
-            item { Spacer(Modifier.height(80.dp)) }   // 别让最后一行被 FAB 压住
+            item { Spacer(Modifier.height(88.dp)) }   // 别让最后一行被 FAB 压住
         }
     }
 }

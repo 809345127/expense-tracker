@@ -25,5 +25,43 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          桌面小组件。
+          ⚠️ android:exported 必须是 true —— 桌面（launcher）是**另一个 app**，
+             它要能给这个 receiver 发广播。写 false 的话小组件在「添加小组件」列表里
+             压根不出现，而且没有任何报错。
+          ⚠️ APPWIDGET_UPDATE 这个 action 少不了，系统靠它认出「这是个小组件」。
+        -->
+        <receiver
+            android:name=".widget.ExpenseWidgetReceiver"
+            android:exported="true"
+            android:label="记账本">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/expense_widget_info" />
+        </receiver>
+
+        <!--
+          导出文件（CSV / 长图）要交给别的 app（微信、邮件、相册…），
+          而安卓从 7.0 起**禁止**直接把 file:// 地址递出去（会抛 FileUriExposedException）。
+          所以走 FileProvider：它把内部目录里的文件包装成一个临时授权的 content:// 地址。
+
+          ⚠️ authorities 用 ${applicationId} 而不是写死包名：debug 包的 applicationId 带
+             `.debug` 后缀，写死的话 debug 和 release 两个包在同一台手机上会因为
+             「provider authority 撞了」**装不上第二个**（报 INSTALL_FAILED_CONFLICTING_PROVIDER）。
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

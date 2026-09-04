@@ -2,8 +2,10 @@ package com.shize.expensetracker.data
 
 import android.content.Context
 import com.shize.expensetracker.sync.SyncWorker
+import com.shize.expensetracker.widget.WidgetRefresh
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import java.math.BigDecimal
 import java.util.UUID
 
@@ -46,9 +48,29 @@ class Repository(
             combine(flow, categories.observeAll()) { list, _ -> list.visible(unlocked) }
         }
 
+    /// 全部账目（过完私密门）。导出「全部」那一档用
+    fun observeAllExpenses(unlocked: Boolean): Flow<List<ExpenseEntity>> =
+        expenses.observeAll().map { it.visible(unlocked) }
+
     fun observeCategories(): Flow<List<CategoryEntity>> = categories.observeAll()
     fun observeTags(): Flow<List<TagEntity>> = tags.observeActive()
+
+    /// ⚠️ 含已归档的标签。历史账目上挂着的归档标签，统计和导出里要能显示出名字，
+    /// 不能因为它归档了就变成一个 id
+    fun observeAllTags(): Flow<List<TagEntity>> = tags.observeAll()
+    fun observeLinks(): Flow<List<LinkEntity>> = links.observeAll()
     suspend fun tagIdsOf(expenseId: String): List<String> = links.tagIdsOf(expenseId)
+
+    /// 分类管理页要的两份用量。
+    /// ⚠️⚠️ 两个口径必须**分开**（见下面 categoryDeletable 的注释）：
+    /// `all` 判能不能删（含私密），`visible` 只用来显示。
+    fun observeCategoryUsage(unlocked: Boolean): Flow<Pair<Map<String, Int>, Map<String, Int>>> =
+        combine(expenses.observeUsageAll(), expenses.observeUsageVisible()) { all, vis ->
+            val allMap = all.associate { it.categoryKey to it.n }
+            // 解锁态下「看得见的」就是全部 —— 用同一份，免得两个数字在解锁后还不一致
+            val visMap = if (unlocked) allMap else vis.associate { it.categoryKey to it.n }
+            allMap to visMap
+        }
 
     // ---------------------------------------------------------------- 写
 
@@ -137,7 +159,7 @@ class Repository(
     suspend fun addTag(name: String, colorIndex: Int): String {
         val id = UUID.randomUUID().toString()
         val t = now()
-        tags.upsert(TagEntity(id, name.trim(), colorIndex, sortOrder = 0,
+        tags.upsert(TagEntity(id, cleanedName(name), colorIndex, sortOrder = 0,
                               createdAt = t, updatedAt = t, dirty = true))
         syncSoon()
         return id
@@ -147,7 +169,10 @@ class Repository(
     /// ⚠️ 代号（id）取「建的这一刻的名字」，撞了就加 `-2` 后缀 —— 跟 iOS 那边**一模一样的算法**，
     /// 这样两台设备各自建同名分类会算出同一个代号、自动并成一条。改这里必须同时改 iOS。
     suspend fun addCategory(name: String, iconName: String, colorIndex: Int): String {
-        val clean = name.trim()
+        // ⚠️ 必须走 cleanedName，不能只 trim：iOS 那边算代号用的就是它
+        //（它还会把名字中间的连续空白压成一个空格）。两端算法差一点，
+        // 同一个名字就会得到两个代号 → 同步之后变成两条一模一样的分类，而且不可逆
+        val clean = cleanedName(name)
         val taken = categories.all().map { it.id }.toSet()
         var key = clean
         var n = 2
@@ -167,7 +192,7 @@ class Repository(
     /// 改分类。⚠️ **只改显示用的三个字段，绝不动 id（代号）** ——
     /// 历史账目认的是代号，动了它们全部找不到分类
     suspend fun updateCategory(c: CategoryEntity, name: String, iconName: String, colorIndex: Int) {
-        categories.upsert(c.copy(name = name.trim(), iconName = iconName,
+        categories.upsert(c.copy(name = cleanedName(name), iconName = iconName,
                                  colorIndex = colorIndex, updatedAt = now(), dirty = true))
         syncSoon()
     }
@@ -202,7 +227,52 @@ class Repository(
         syncSoon()
     }
 
-    /// 写完就催一次同步。⚠️ 不 await —— 记账这个动作不该被网络拖住，
-    /// 没网时 WorkManager 会自己排队等网络回来
-    private fun syncSoon() = SyncWorker.syncNow(context)
+    /// 写完就催一次同步 + 刷一次桌面小组件。
+    ///
+    /// ⚠️ 同步不 await —— 记账这个动作不该被网络拖住，没网时 WorkManager 会自己排队等网络回来。
+    /// ⚠️ 小组件也要刷：不刷的话桌面上那个数会停在上一次的值，而**它跟 app 里的数对不上
+    /// 本身就是个隐私漏洞**（能看出"有几笔没算进去"）。
+    private fun syncSoon() {
+        SyncWorker.syncNow(context)
+        WidgetRefresh.request(context)
+    }
+
+    // ---------------------------------------------------------------- 桌面小组件
+
+    /// 桌面小组件要显示的那几个数。
+    ///
+    /// ⚠️⚠️ **恒定按锁定态算**（`visible(unlocked = false)`）：小组件摆在桌面上，
+    /// 比 app 里更暴露；而且只要它跟 app 锁定态的数字对不上，别人一比就知道藏了东西。
+    /// 跟 iOS 那边一样，过滤在写入这一侧做，小组件拿到什么显示什么。
+    suspend fun widgetSummary(): WidgetSummary {
+        val month = java.time.YearMonth.now()
+        val zone = java.time.ZoneId.systemDefault()
+        val from = month.atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val to = month.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
+
+        val items = expenses.range(from, to).visible(unlocked = false)
+        val byKey = categories.all().associateBy { it.id }
+        val top = items.groupBy { it.categoryKey }
+            .map { (k, v) ->
+                WidgetSlice(byKey[k]?.name ?: k, v.fold(BigDecimal.ZERO) { a, e -> a + e.amount })
+            }
+            .sortedByDescending { it.amount }
+            .take(3)
+
+        return WidgetSummary(
+            monthLabel = "${month.year}年${month.monthValue}月",
+            total = items.fold(BigDecimal.ZERO) { a, e -> a + e.amount },
+            count = items.size,
+            top = top,
+        )
+    }
 }
+
+data class WidgetSlice(val name: String, val amount: BigDecimal)
+
+data class WidgetSummary(
+    val monthLabel: String,
+    val total: BigDecimal,
+    val count: Int,
+    val top: List<WidgetSlice>,
+)

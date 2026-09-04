@@ -7,6 +7,7 @@ import com.shize.expensetracker.App
 import com.shize.expensetracker.data.*
 import com.shize.expensetracker.sync.Network
 import com.shize.expensetracker.sync.SyncEngine
+import com.shize.expensetracker.sync.SyncWorker
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -51,8 +52,15 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
             val api = Network.api(settings)
             if (api == null) "地址或 token 还没填" else {
                 val r = SyncEngine(api, db, settings).syncOnce()
-                settings.recordSuccess()
-                "拉下来 ${r.pulled} 条 / 推上去 ${r.pushed} 条"
+                if (r.stale.isEmpty()) {
+                    settings.recordSuccess()
+                    "拉下来 ${r.pulled} 条 / 推上去 ${r.pushed} 条"
+                } else {
+                    // ⚠️ 不能只说「同步完成」—— 那几条改动已经永久丢了
+                    settings.recordFailure(SyncWorker.staleMessage(r.stale.size))
+                    "拉下来 ${r.pulled} 条 / 推上去 ${r.pushed} 条。" +
+                            SyncWorker.staleMessage(r.stale.size)
+                }
             }
         } catch (e: Exception) {
             // ⚠️ 失败要留痕，静默失败是最坏的形态

@@ -18,6 +18,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -30,6 +31,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.shize.expensetracker.App
+import com.shize.expensetracker.hasDeviceLock
 import com.shize.expensetracker.data.CategoryEntity
 import com.shize.expensetracker.data.ExpenseEntity
 import kotlinx.coroutines.flow.*
@@ -174,9 +176,19 @@ fun ExpenseFormScreen(
             ) {
                 Column(Modifier.weight(1f)) {
                     Text("私密记录", style = MaterialTheme.typography.bodyLarge)
-                    Text("锁着的时候整个 app 当它不存在（列表、合计、统计全排除）",
-                         style = MaterialTheme.typography.bodySmall,
-                         color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    // ⚠️ 这台机器没设锁屏密码 / 没录指纹时，这个开关其实是**没有牙的**：
+                    // 没有任何凭据可验，私密门只能直接放行（见 PrivacyGate.unlock ——
+                    // 那样做比"永久锁死、自己也拿不回来"诚实）。
+                    // 既然如此就得**当场说清楚**，不能让人以为记了私密就藏住了。
+                    if (hasDeviceLock(LocalContext.current)) {
+                        Text("锁着的时候整个 app 当它不存在（列表、合计、统计、小组件、导出全排除）",
+                             style = MaterialTheme.typography.bodySmall,
+                             color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        Text("这台手机还没设锁屏密码，所以这个开关挡不住人 —— 去系统设置里加一个锁屏密码或指纹，它才有用。",
+                             style = MaterialTheme.typography.bodySmall,
+                             color = MaterialTheme.colorScheme.error)
+                    }
                 }
                 Switch(checked = isPrivate, onCheckedChange = { isPrivate = it })
             }

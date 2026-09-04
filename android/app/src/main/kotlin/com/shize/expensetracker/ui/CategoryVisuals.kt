@@ -90,6 +90,38 @@ private val iconMap: Map<String, ImageVector> = mapOf(
 fun categoryIcon(sfSymbolName: String): ImageVector =
     iconMap[sfSymbolName] ?: Icons.Filled.QuestionMark
 
+/// 新建 / 编辑分类时能挑的图标，分组跟 iOS 的 `CategoryIconLibrary.groups` **一一对应**。
+///
+/// ⚠️ 存进库、传出去的是**左边那个 SF Symbols 名**，安卓这边只在显示时映射成 Material 图标。
+/// 千万别为了"安卓这边好写"就把名字换成 Material 的 —— 换了会推回 iOS，
+/// 那边 SF Symbols 里没有这些名字，结果是 iPhone 上一片灰问号（见文件头）。
+///
+/// 加图标：往这里加一行，**同时**在上面的 iconMap 里补一条映射。
+/// 漏了映射只是显示成问号（不崩、不污染数据），但两边的可选清单会对不上。
+val categoryIconGroups: List<Pair<String, List<String>>> = listOf(
+    "吃喝" to listOf("fork.knife", "cup.and.saucer.fill", "wineglass.fill", "birthday.cake.fill",
+                    "carrot.fill", "takeoutbag.and.cup.and.straw.fill"),
+    "出行" to listOf("tram.fill", "car.fill", "airplane", "bicycle", "fuelpump.fill",
+                    "map.fill", "suitcase.fill", "ferry.fill"),
+    "居家" to listOf("house.fill", "bed.double.fill", "lightbulb.fill", "washer.fill",
+                    "wrench.and.screwdriver.fill", "leaf.fill"),
+    "购物" to listOf("bag.fill", "cart.fill", "giftcard.fill", "shippingbox.fill",
+                    "tshirt.fill", "shoe.fill"),
+    "身体" to listOf("cross.case.fill", "pills.fill", "stethoscope", "figure.run",
+                    "dumbbell.fill", "scissors", "comb.fill"),
+    "学习娱乐" to listOf("book.fill", "graduationcap.fill", "gamecontroller.fill", "film.fill",
+                      "music.note", "ticket.fill", "camera.fill", "paintbrush.fill"),
+    "人情往来" to listOf("gift.fill", "heart.fill", "person.2.fill", "hands.clap.fill"),
+    "钱与其它" to listOf("arrow.triangle.2.circlepath", "creditcard.fill", "banknote.fill",
+                      "pawprint.fill", "phone.fill", "wifi", "ellipsis.circle.fill",
+                      "questionmark.circle.fill"),
+)
+
+const val FALLBACK_ICON = "questionmark.circle.fill"
+
+/// 分类色板有几个颜色（新建分类时轮着给，尽量不撞色）
+val categoryColorCount: Int get() = categoryColors.size
+
 /// 分类配色。**顺序必须跟 iOS 那份 `CategoryPalette.colors` 一一对应** ——
 /// 同步过来的是**下标**不是色值，两边顺序不一致的话同一个分类在两台设备上会是不同颜色。
 private val categoryColors = listOf(

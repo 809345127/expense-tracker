@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 允许往外递的目录白名单。
+  只放 cache 下的 export/ 一个子目录 —— 导出的 CSV 和长图都写到那儿。
+
+  ⚠️ 别图省事写成整个 cache 根目录：那等于把「凡是 app 缓存过的东西」都变成
+     可以被递出去的，包括 OkHttp 的响应缓存之类。范围开到刚好够用为止。
+-->
+<paths>
+    <cache-path name="export" path="export/" />
+</paths>

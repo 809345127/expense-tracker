@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.work.*
 import com.shize.expensetracker.data.AppDatabase
 import com.shize.expensetracker.data.Settings
+import com.shize.expensetracker.widget.WidgetRefresh
 import java.util.concurrent.TimeUnit
 
 /// 后台同步。用 WorkManager —— 这是安卓做这件事的标准答案：
@@ -16,7 +17,14 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         val api = Network.api(settings) ?: return Result.success()  // 还没配服务器，不算失败
         return try {
             val report = SyncEngine(api, AppDatabase.get(applicationContext), settings).syncOnce()
-            settings.recordSuccess()
+            if (report.stale.isEmpty()) settings.recordSuccess()
+            // ⚠️ 有 stale 就**不算干净成功**：那几条改动已经永久没了，
+            // 必须在同步设置页里留下痕迹，否则两台手机数据不一样而界面上一切正常
+            else settings.recordFailure(staleMessage(report.stale.size))
+            // ⚠️ 拉到新数据也要刷桌面小组件：另一台手机上记的账，本机界面靠 Room 的 Flow
+            // 自动更新，但小组件不在 Compose 里、不会自己动 —— 不刷的话桌面上那个数会
+            // 一直是上次的值，而它跟 app 里对不上本身就是个隐私漏洞（能看出差了几笔）
+            if (report.pulled > 0) WidgetRefresh.request(applicationContext)
             Result.success(workDataOf("pulled" to report.pulled, "pushed" to report.pushed))
         } catch (e: Exception) {
             // ⚠️ 失败要留痕给界面看。静默失败是最坏的形态：
@@ -29,6 +37,12 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     }
 
     companion object {
+        /// ⚠️ 两个调用点（后台任务 / 设置页里手动点）用**同一句话**，
+        /// 免得同一件事在两个地方说法不一样
+        fun staleMessage(n: Int) =
+            "有 $n 条改动被服务器当成旧数据丢掉了 —— 几乎肯定是这台设备的时间比另一台慢。" +
+                    "去两台手机的「设置 → 日期与时间」都打开自动校准，然后重新记一次那几笔。"
+
         private const val PERIODIC = "sync-periodic"
         private const val ONESHOT = "sync-now"
 

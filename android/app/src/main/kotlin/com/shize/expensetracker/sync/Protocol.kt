@@ -87,6 +87,16 @@ data class PushResult(
     val rev: Long = 0,
     val received: Int = 0,
     val applied: Int = 0,
+    /// ⚠️⚠️ **被服务器当成旧数据丢掉的那些记录的 id。非空必须让用户看见，不能咽掉。**
+    ///
+    /// 它几乎只有一个原因：**这台设备的时钟比另一台慢**。
+    /// 时钟慢的那台每次推都会被判成旧的 → 它的改动**永久丢失、而且毫无迹象**
+    /// （界面上一切正常，只是那笔账在另一台上永远不出现）。
+    /// 协议原文见 server/README.md「POST /v1/changes」那一节。
+    ///
+    /// 注意区分：原样重推同一批数据时 `applied` 也会是 0，但那是正常的、`stale` 是空的
+    /// —— 服务端会现查库里那条的 updated_at 来分辨这两种情况。
+    val stale: List<String> = emptyList(),
 )
 
 interface SyncApi {

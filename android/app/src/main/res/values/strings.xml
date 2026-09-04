@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 桌面小组件在「添加小组件」那个列表里的说明文字 -->
+    <string name="widget_description">本月支出总额和分类排行</string>
+</resources>

@@ -17,7 +17,12 @@ class SyncEngine(
     private val db: AppDatabase,
     private val settings: Settings,
 ) {
-    data class Report(val pulled: Int, val pushed: Int, val rev: Long)
+    /// ⚠️ `stale` 要一路带到界面上（见 PushResult.stale 的注释）：
+    /// 它代表**已经永久丢掉的改动**，咽掉的话两台手机的数据会静静地不一样。
+    data class Report(
+        val pulled: Int, val pushed: Int, val rev: Long,
+        val stale: List<String> = emptyList(),
+    )
 
     suspend fun syncOnce(): Report {
         var pulled = 0
@@ -43,13 +48,15 @@ class SyncEngine(
         // ---- 4~5：推本地改动 ----
         val outbox = collectDirty()
         var pushed = 0
+        var stale: List<String> = emptyList()
         if (!outbox.isEmpty) {
             val res = api.push(outbox)
             pushed = res.applied
+            stale = res.stale
             clearDirty(outbox)
             settings.setLastRev(maxOf(res.rev, settings.lastRev()))
         }
-        return Report(pulled, pushed, settings.lastRev())
+        return Report(pulled, pushed, settings.lastRev(), stale)
     }
 
     /// 合并规则（**唯一一条**，四种记录共用）：

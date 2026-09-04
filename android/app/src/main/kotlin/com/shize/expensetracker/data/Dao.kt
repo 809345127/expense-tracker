@@ -29,6 +29,11 @@ interface ExpenseDao {
     @Query("SELECT * FROM expense WHERE id = :id AND deleted = 0")
     suspend fun find(id: String): ExpenseEntity?
 
+    /// 一次性取某个月（给桌面小组件用 —— 它不是长驻界面，订阅 Flow 没意义）。
+    /// ⚠️ **故意不在这里滤私密**：私密过滤统一在 Repository.visible() 那一处做（见文件头）
+    @Query("SELECT * FROM expense WHERE deleted = 0 AND date >= :from AND date < :to")
+    suspend fun range(from: Long, to: Long): List<ExpenseEntity>
+
     /// 同步用：**不带** deleted 过滤（合并时要看得到墓碑）
     @Query("SELECT * FROM expense WHERE id = :id")
     suspend fun findRaw(id: String): ExpenseEntity?
@@ -56,7 +61,19 @@ interface ExpenseDao {
 
     @Query("SELECT COUNT(*) FROM expense WHERE deleted = 0 AND categoryKey = :key AND isPrivate = 0")
     suspend fun countVisibleInCategory(key: String): Int
+
+    /// 每个分类各被多少笔账用着。⚠️ 两个口径分开的理由同上面那两条，
+    /// 分类管理页要同时拿到「全部（判能不能删）」和「看得见的（显示）」两份。
+    /// 一次 GROUP BY 拿全表，比按分类逐个查省一个数量级的往返
+    @Query("SELECT categoryKey AS categoryKey, COUNT(*) AS n FROM expense WHERE deleted = 0 GROUP BY categoryKey")
+    fun observeUsageAll(): Flow<List<CategoryUsage>>
+
+    @Query("SELECT categoryKey AS categoryKey, COUNT(*) AS n FROM expense WHERE deleted = 0 AND isPrivate = 0 GROUP BY categoryKey")
+    fun observeUsageVisible(): Flow<List<CategoryUsage>>
 }
+
+/// GROUP BY 的投影行。Room 需要一个具名类型来接
+data class CategoryUsage(val categoryKey: String, val n: Int)
 
 @Dao
 interface TagDao {

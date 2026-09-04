@@ -5,6 +5,8 @@ import com.shize.expensetracker.data.AppDatabase
 import com.shize.expensetracker.data.Repository
 import com.shize.expensetracker.data.Settings
 import com.shize.expensetracker.sync.SyncWorker
+import kotlinx.coroutines.flow.MutableStateFlow
+import java.time.YearMonth
 
 /// 整个 app 的入口 + 依赖容器。
 ///
@@ -15,6 +17,15 @@ class App : Application() {
     val database by lazy { AppDatabase.get(this) }
     val settings by lazy { Settings(this) }
     val repository by lazy { Repository(this, database) }
+
+    /// ⚠️ 私密门是**全进程唯一一份**。原因见 PrivacyGate 的注释：
+    /// 每个页面各存一份的话会出现「明细页锁着、统计页开着」，两页总额当场对不上。
+    val gate by lazy { PrivacyGate() }
+
+    /// 当前在看哪个月。**明细页和统计页共用这一份** —— 对位 iOS 那边把 month
+    /// 提到 App 级当 `@Binding` 传下去的做法。各存一份的话，在明细页翻到 7 月、
+    /// 切到统计页却还是 8 月，两个页面对不上。
+    val month = MutableStateFlow(YearMonth.now())
 
     override fun onCreate() {
         super.onCreate()

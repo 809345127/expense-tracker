@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  桌面小组件的「登记表」：系统靠它知道这个小组件多大、多久刷一次、预览长什么样。
+
+  ⚠️ minWidth/minHeight 用的是 dp，但桌面是按**格子**排的：一格约 70dp（含间距），
+     所以 180×110 ≈ 3×2 格（对位 iOS 的中号）。targetCellWidth/Height 是 Android 12+
+     的新写法（直接按格子说），两套都写上 —— 老写法是给 12 以下兜底的，minSdk 33
+     其实用不到，但留着不花钱、也免得以后调门槛时忘了补。
+
+  ⚠️ updatePeriodMillis 最小生效值是 **30 分钟**（写更小的会被系统静默改成 30 分钟）。
+     这里只是兜底：数据一变，app 会主动调 updateAll 立刻刷（见 WidgetRefresh）。
+
+  ⚠️ resizeMode 给 horizontal|vertical：配合 Glance 的 SizeMode.Exact，
+     用户在桌面上怎么拉都能重新排版。
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="180dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="3"
+    android:targetCellHeight="2"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="40dp"
+    android:updatePeriodMillis="1800000"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:description="@string/widget_description"
+    android:initialLayout="@layout/glance_default_loading_layout" />
