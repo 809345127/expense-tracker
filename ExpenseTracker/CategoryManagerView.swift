@@ -36,7 +36,11 @@ struct CategoryManagerView: View {
     @Environment(PrivacyGate.self) private var gate
 
     @Query(sort: [SortDescriptor(\CategoryDef.sortOrder), SortDescriptor(\CategoryDef.createdAt)])
-    private var categories: [CategoryDef]
+    private var categoriesRaw: [CategoryDef]
+    /// ⚠️ 墓碑过滤统一在这里做（`.alive`），下面所有用到它的地方一行都不用改。
+    /// 之所以不在 `@Query` 的 `#Predicate` 里滤：这个项目记着「谓词里的布尔取反编译能过、
+    /// 运行时可能抛『不支持的谓词』把界面打崩」，所以一律在内存里滤。
+    private var categories: [CategoryDef] { categoriesRaw.alive }
 
     /// ⚠️ 故意查**全部**记录，不过私密门 —— 只用来数「这个分类有没有被用过」，
     /// 数字本身不直接显示（见文件头的说明）
@@ -46,9 +50,12 @@ struct CategoryManagerView: View {
     @State private var creating = false
     @State private var blockedMessage: String?
 
-    /// 每个分类被多少笔账用着（含私密）
+    /// 每个分类被多少笔账用着（含私密）。
+    /// ⚠️ 这里**故意不走** `visible(unlocked:)`（删除判定必须按全部记录算，见下面 canDelete），
+    /// 所以要自己带上 `.alive` —— 否则被删掉的账（墓碑）会被算成"还在用这个分类"，
+    /// 于是一个明明空了的分类永远删不掉，而且提示语说不出是为什么。
     private var totalUsage: [String: Int] {
-        allExpenses.reduce(into: [:]) { $0[$1.categoryRaw, default: 0] += 1 }
+        allExpenses.alive.reduce(into: [:]) { $0[$1.categoryRaw, default: 0] += 1 }
     }
 
     /// 看得见的那部分笔数（锁定态下不含私密）。只用来显示
@@ -149,7 +156,8 @@ struct CategoryManagerView: View {
         reordered.move(fromOffsets: source, toOffset: destination)
         // 重排之后整体重新编号。不做「只改动过的那几个」那种小聪明 ——
         // 十来条数据，全量重写最不容易出错
-        for (i, c) in reordered.enumerated() { c.sortOrder = i }
+        // ⚠️ 每条都要 touch：排序也是要同步出去的改动（安卓那边的顺序要跟着变）
+        for (i, c) in reordered.enumerated() { c.sortOrder = i; c.touch() }
         try? context.save()
     }
 
@@ -162,7 +170,8 @@ struct CategoryManagerView: View {
                 blockedMessage = reason
                 continue
             }
-            context.delete(c)
+            // ⚠️ 置墓碑，不是删行
+            c.markDeleted()
         }
         try? context.save()
     }
@@ -189,7 +198,11 @@ struct CategoryEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
 
-    @Query(sort: \CategoryDef.sortOrder) private var categories: [CategoryDef]
+    @Query(sort: \CategoryDef.sortOrder) private var categoriesRaw: [CategoryDef]
+    /// ⚠️ 墓碑过滤统一在这里做（`.alive`），下面所有用到它的地方一行都不用改。
+    /// 之所以不在 `@Query` 的 `#Predicate` 里滤：这个项目记着「谓词里的布尔取反编译能过、
+    /// 运行时可能抛『不支持的谓词』把界面打崩」，所以一律在内存里滤。
+    private var categories: [CategoryDef] { categoriesRaw.alive }
 
     private let editing: CategoryDef?
     @State private var name: String
@@ -317,6 +330,7 @@ struct CategoryEditorView: View {
             editing.name = cleanedName
             editing.iconName = iconName
             editing.colorIndex = colorIndex
+            editing.touch()   // ⚠️ 漏了这一句，这次改名就同步不出去
         } else {
             context.insert(CategoryDef(
                 key: newKey(),

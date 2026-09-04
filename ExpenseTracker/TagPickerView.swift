@@ -17,7 +17,8 @@ struct TagPickerView: View {
     @Query(sort: [SortDescriptor(\Tag.sortOrder), SortDescriptor(\Tag.createdAt)])
     private var allTags: [Tag]
 
-    private var tags: [Tag] { allTags.filter { !$0.isArchived } }
+    /// ⚠️ `.alive` 摘掉删除墓碑，整个文件都从这里取标签，所以只用滤这一处
+    private var tags: [Tag] { allTags.alive.filter { !$0.isArchived } }
 
     @State private var search = ""
     @State private var renaming: Tag?
@@ -88,7 +89,9 @@ struct TagPickerView: View {
                 Button("删除", role: .destructive) { confirmDelete() }
                 Button("取消", role: .cancel) { pendingDelete = nil }
             } message: {
-                Text("这个标签用在 \(pendingDelete?.expenses.count ?? 0) 笔记录上。删掉后那些记录会失去这个标签，金额和其它内容不受影响。")
+                // ⚠️ `tag.expenses` 是 SwiftData 的关系、不是 @Query，所以不经过 visible()，
+                // 必须自己过 `.alive` —— 不然删掉的账会被数进"这个标签用在几笔上"
+                Text("这个标签用在 \(pendingDelete?.expenses.alive.count ?? 0) 笔记录上。删掉后那些记录会失去这个标签，金额和其它内容不受影响。")
             }
             .alert(alertMessage ?? "", isPresented: Binding(
                 get: { alertMessage != nil },
@@ -112,7 +115,7 @@ struct TagPickerView: View {
                     .foregroundStyle(.primary)
                 Spacer()
                 // 这个标签一共用在多少笔记录上，顺手给个手感
-                Text("\(tag.expenses.count)")
+                Text("\(tag.expenses.alive.count)")   // ⚠️ 同上，关系要自己过墓碑
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .monospacedDigit()
@@ -199,13 +202,18 @@ struct TagPickerView: View {
             return
         }
         tag.name = cleaned
+        tag.touch()   // ⚠️ 漏了这一句，改名就同步不出去
         try? context.save()
     }
 
     private func confirmDelete() {
         guard let tag = pendingDelete else { return }
         selection.remove(tag.persistentModelID)
-        context.delete(tag)
+        // ⚠️ 置墓碑，不是删行。
+        // 注意：SwiftData 删对象时会自动解除关系，置墓碑不会 —— 所以要自己把关系断开，
+        // 否则被删标签仍然挂在那些账目上（界面靠 alive 过滤看不见，但导出和统计会数进去）
+        for e in tag.expenses { e.tags.removeAll { $0.persistentModelID == tag.persistentModelID }; e.touch() }
+        tag.markDeleted()
         try? context.save()
         pendingDelete = nil
     }

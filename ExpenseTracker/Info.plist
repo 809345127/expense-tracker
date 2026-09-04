@@ -5,6 +5,17 @@
 	<!-- 桌面小组件点一下要能直接跳进「记一笔」，靠的是自定义 URL scheme。
 	     ⚠️ 这个键没法用 INFOPLIST_KEY_ 那套构建设置表达，只能给一份真的 Info.plist；
 	     GENERATE_INFOPLIST_FILE 仍然是 YES，Xcode 会把这份和它自动生成的那些合并。 -->
+	<!-- 允许明文 HTTP。
+	     iOS 默认禁止明文（App Transport Security），不开这个开关同步一定失败，
+	     而且报错是 -1022 那种看不出所以然的形式。
+	     自建的同步服务现在跑在 http:// 上（用户决定不上 TLS，数据不敏感），所以必须放开。
+	     ⚠️ 以后同步服务上了 HTTPS，把下面这一整段删掉。
+	     ⚠️ 放开的是"允许明文"，不是"不校验证书" —— 走 https 的请求照常验证书。 -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

@@ -44,7 +44,7 @@ enum DevFlags {
 enum DemoData {
     static func makeInMemoryContainer() -> ModelContainer {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        let container = try! ModelContainer(for: Expense.self, Tag.self, CategoryDef.self, configurations: config)
+        let container = try! ModelContainer(for: Expense.self, Tag.self, CategoryDef.self, TagLink.self, configurations: config)
         let context = ModelContext(container)
 
         // 分类现在是库里的数据，演示库也得先种上，否则九宫格是空的

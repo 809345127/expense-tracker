@@ -13,6 +13,10 @@ struct ExpenseTrackerApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        #if DEBUG
+        // 第一次给真机配同步用：`-sync.url … -sync.token …`（见 SyncConfig 里那段注释）
+        SyncConfig.adoptLaunchArgsIfAny()
+        #endif
         // -seedDemo 只用于开发期截图演示：数据放内存、不落盘，正常启动完全不走这里
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-seedDemo") {
@@ -21,11 +25,17 @@ struct ExpenseTrackerApp: App {
         }
         #endif
         do {
-            container = try ModelContainer(for: Expense.self, Tag.self, CategoryDef.self)
+            // ⚠️ TagLink 是同步用的关联表（见 Sync.swift）。加一张新表属于 SwiftData
+            // 的自动轻量迁移，老库照常打开；但**必须登记在这里**，否则运行时一碰它就崩。
+            container = try ModelContainer(for: Expense.self, Tag.self, CategoryDef.self, TagLink.self)
+            let ctx = ModelContext(container)
             // 分类从「写死的枚举」改成「库里的一张表」之后，第一次启动（以及从老版本
             // 升上来的第一次）得把那 10 个预设种进去，否则记一笔时九宫格是空的。
             // ⚠️ 按 key 判断存不存在，删掉的预设不会自己长回来，见 CategorySeed
-            CategorySeed.seedIfNeeded(ModelContext(container))
+            CategorySeed.seedIfNeeded(ctx)
+            // 同步之前就存在的记录要补上同步 id（老库里那些字段是空的）。
+            // ⚠️ 幂等、每次启动都跑：判据是逐条看 syncID 空不空，不是一个"迁移过了"的开关
+            SyncBackfill.run(ctx)
         } catch {
             fatalError("初始化本地数据库失败：\(error)")
         }
@@ -78,6 +88,17 @@ struct ExpenseTrackerApp: App {
             }
         }
         #endif
+        // 每次切到前台同步一次。
+        // ⚠️ iOS 上**没有**安卓 WorkManager 那种"进程被杀也能跑"的后台调度，
+        // 所以 iOS 这边只能在 app 活着的时候同步：切到前台一次 + 每次记账之后一次。
+        // 也就是说「iPhone 上记的账要等你下次打开 app 才传出去」—— 这是平台差异，不是 bug。
+        // ⚠️ 必须带 initial: true。不带的话「启动那一刻 scenePhase 已经是 .active」
+        // 就不算一次变化、onChange 压根不触发 —— 症状是「冷启动不同步、切出去再切回来才同步」，
+        // 而这种时好时坏最难查
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            guard phase == .active, SyncConfig.isConfigured else { return }
+            Task { await SyncEngine.shared.syncNow(container) }
+        }
         .onChange(of: scenePhase) { _, phase in
             // 切到后台就上锁。把手机递给别人之前基本都会先按一下 home 或者切走，
             // 这一下就把门关上了 —— 比指望自己记得手动退出可靠得多。
@@ -128,6 +149,10 @@ struct RootView: View {
     #if DEBUG
     @State private var appliedDebugSheet = false
     @State private var appliedDebugLink = false
+    @State private var ranTombstoneProbe = false
+    @Environment(\.modelContext) private var probeContext
+    @Environment(\.categoryCatalog) private var probeCatalog
+    @Environment(PrivacyGate.self) private var probeGate
     #endif
 
     /// 筛选条件。**全 app 只有这一份**，所以放在两个 tab 的共同父级。
@@ -203,6 +228,15 @@ struct RootView: View {
                   let url = URL(string: raw) else { return }
             appliedDebugLink = true
             handleDeepLink(url)
+        }
+        #endif
+        #if DEBUG
+        // -probeTombstone：验「删除墓碑会不会漏进某个界面」，结果落盘到 Documents/tombstone.txt。
+        // ⚠️ 一次性门闩，不能拿"当前状态"当条件（这个项目踩过：切个 tab 回来会自己再跑一遍）
+        .onAppear {
+            guard !ranTombstoneProbe else { return }
+            ranTombstoneProbe = true
+            TombstoneProbe.run(probeContext, unlocked: probeGate.isUnlocked, catalog: probeCatalog)
         }
         #endif
         #if DEBUG

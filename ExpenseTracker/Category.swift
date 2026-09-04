@@ -51,6 +51,18 @@ final class CategoryDef {
     // ⚠️ 必须写 Date.now 不能写 .now：@Model 宏要求默认值是完整写法
     var createdAt: Date = Date.now
 
+    // MARK: 同步字段（2026-09-04 加，说明见 Models.swift 里 Expense 那一组）
+    //
+    // ⚠️ **分类没有 syncID**：它的同步 id 就是上面那个 `key`。
+    // 这是刻意的 —— key 天生稳定（建好永不改，改名只改 name），而且两台设备各自
+    // 新建同名分类时，代号是按名字算出来的、会算出同一个，于是自动并成一条。
+    // 另发一个 UUID 反而会变成两条一模一样的分类。
+    var updatedAt: Date = Date.now
+    var tombstone: Bool = false
+    /// ⚠️ 默认 true，理由见 Models.swift 里 Expense.needsPush 上那段。
+    /// 分类**没有 syncID 可以判「补没补过」**（它的 id 就是 key），所以只能靠这个默认值。
+    var needsPush: Bool = true
+
     init(key: String, name: String, iconName: String,
          colorIndex: Int, sortOrder: Int, isFallback: Bool = false) {
         self.key = key
@@ -60,6 +72,18 @@ final class CategoryDef {
         self.sortOrder = sortOrder
         self.isFallback = isFallback
         self.createdAt = .now
+        self.updatedAt = .now
+        self.needsPush = true
+    }
+
+    func touch() {
+        updatedAt = .now
+        needsPush = true
+    }
+
+    func markDeleted() {
+        tombstone = true
+        touch()
     }
 
     var color: Color { CategoryPalette.color(at: colorIndex) }
@@ -178,9 +202,24 @@ enum CategorySeed {
             return
         }
         for (i, s) in builtIn.enumerated() {
-            context.insert(CategoryDef(key: s.key, name: s.name, iconName: s.icon,
-                                       colorIndex: s.color, sortOrder: i,
-                                       isFallback: s.key == fallbackKey))
+            let c = CategoryDef(key: s.key, name: s.name, iconName: s.icon,
+                                colorIndex: s.color, sortOrder: i,
+                                isFallback: s.key == fallbackKey)
+            // ⚠️⚠️ **种出来的默认分类必须打不赢同步来的版本。**
+            // 把它的 updatedAt 压到 1970，这样合并时服务器上那份（时间戳是真实的）
+            // 一定更新、一定覆盖它。
+            //
+            // 不这么做的后果是真会丢数据：新装一台设备时，这里种出来的 10 条
+            // 带着「现在」的时间戳和「待推送」标记，在合并里看起来就像**用户刚做的本地改动**，
+            // 于是按「后写赢」把服务器上的真实状态盖掉 ——
+            // 你在手机上把「餐饮」改名成「吃饭」，装第二台设备就会把它推回「餐饮」。
+            // 我第一版就是这样，测出来的症状是拉回来的分类顺序跟手机上不一样。
+            //
+            // needsPush 仍然是 true：服务器上**没有**这个代号时（真的第一次用），
+            // 它还是要被推上去。而服务器上有的话，合并那一步会先把它覆盖掉、
+            // 顺带清掉 needsPush，所以压根不会被推 —— 也就不会触发「被当成旧数据」的告警。
+            c.updatedAt = Date(timeIntervalSince1970: 0)
+            context.insert(c)
         }
         try? context.save()
     }
@@ -211,7 +250,10 @@ struct CategoryCatalog {
     private let byKey: [String: CategoryDef]
 
     init(_ defs: [CategoryDef]) {
-        let sorted = defs.sorted { $0.sortOrder < $1.sortOrder }
+        // ⚠️ 墓碑在这里统一摘掉。catalog 是全 app 取分类的唯一入口
+        //（列表行的图标和名字、统计排行、导出、小组件摘要都走它），
+        // 在这一处滤掉，就不用指望每个调用点都记得过滤。
+        let sorted = defs.alive.sorted { $0.sortOrder < $1.sortOrder }
         self.all = sorted
         self.byKey = Dictionary(sorted.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
     }

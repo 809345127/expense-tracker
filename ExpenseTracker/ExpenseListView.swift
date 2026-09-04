@@ -11,10 +11,25 @@ struct ExpenseListScreen: View {
     @State private var showingExport = false
 
     #if DEBUG
-    @Query private var allTags: [Tag]
+    @Query private var allTagsRaw: [Tag]
+    /// ⚠️ 墓碑过滤统一在这里做（`.alive`），下面所有用到它的地方一行都不用改。
+    /// 之所以不在 `@Query` 的 `#Predicate` 里滤：这个项目记着「谓词里的布尔取反编译能过、
+    /// 运行时可能抛『不支持的谓词』把界面打崩」，所以一律在内存里滤。
+    private var allTags: [Tag] { allTagsRaw.alive }
     @Environment(\.categoryCatalog) private var catalog
     @State private var appliedDebugFilter = false
     #endif
+
+    @State private var showingSync = false
+    @State private var syncEngine = SyncEngine.shared
+
+    /// 同步按钮的图标。状态直接画在主界面上，不用进二级页面才知道坏了
+    private var syncIcon: String {
+        if case .failed = syncEngine.state { return "arrow.trianglehead.2.clockwise.rotate.90.circle" }
+        if !SyncConfig.isConfigured { return "icloud.slash" }
+        if !SyncConfig.lastError.isEmpty { return "exclamationmark.icloud" }
+        return "checkmark.icloud"
+    }
 
     private var filterButton: some View {
         Button {
@@ -44,12 +59,26 @@ struct ExpenseListScreen: View {
                             Image(systemName: "square.and.arrow.up")
                         }
                     }
+                    // 同步：跟筛选、分享合成同一个玻璃胶囊（放同一侧就会自动成组）。
+                    // ⚠️ 图标带状态：没配服务器时是空心云、同步失败时是带斜杠的云 ——
+                    // 同步这种「在后台默默跑」的东西，出问题必须在主界面上看得见，
+                    // 否则两台手机数据不一样、而界面上一切正常
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showingSync = true
+                        } label: {
+                            Image(systemName: syncIcon)
+                        }
+                    }
                 }
                 .sheet(isPresented: $showingExport) {
                     ExportSheet(month: $month)
                 }
                 .sheet(isPresented: $showingFilter) {
                     FilterSheet(filter: $filter, month: month)
+                }
+                .sheet(isPresented: $showingSync) {
+                    SyncSettingsView()
                 }
                 .onAppear { applyDebugLaunchOptions() }
         }
@@ -172,7 +201,8 @@ private struct ExpenseList: View {
                             .onTapGesture { editing = expense }
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
-                                    context.delete(expense)
+                                    // ⚠️ 置墓碑，不是删行。真删的话另一台设备下次同步会把它送回来
+                                    expense.markDeleted()
                                     try? context.save()
                                 } label: {
                                     Label("删除", systemImage: "trash")

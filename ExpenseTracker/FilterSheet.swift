@@ -17,7 +17,11 @@ struct FilterSheet: View {
     /// 当月记录。⚠️ 用之前必须先过 `visible(unlocked:)` —— 见下面 counts
     @Query private var monthExpenses: [Expense]
     @Query(sort: [SortDescriptor(\CategoryDef.sortOrder), SortDescriptor(\CategoryDef.createdAt)])
-    private var allCategories: [CategoryDef]
+    private var allCategoriesRaw: [CategoryDef]
+    /// ⚠️ 墓碑过滤统一在这里做（`.alive`），下面所有用到它的地方一行都不用改。
+    /// 之所以不在 `@Query` 的 `#Predicate` 里滤：这个项目记着「谓词里的布尔取反编译能过、
+    /// 运行时可能抛『不支持的谓词』把界面打崩」，所以一律在内存里滤。
+    private var allCategories: [CategoryDef] { allCategoriesRaw.alive }
 
     /// 编辑中的副本：点「完成」才写回去。中途反悔直接关掉，外面的列表不会跟着乱跳
     @State private var draft: ExpenseFilter
@@ -162,7 +166,11 @@ private struct TagFilterSection: View {
     @Binding var selection: Set<PersistentIdentifier>
     let counts: [PersistentIdentifier: Int]
     @Query(sort: [SortDescriptor(\Tag.sortOrder), SortDescriptor(\Tag.name)])
-    private var tags: [Tag]
+    private var tagsRaw: [Tag]
+    /// ⚠️ 墓碑过滤统一在这里做（`.alive`），下面所有用到它的地方一行都不用改。
+    /// 之所以不在 `@Query` 的 `#Predicate` 里滤：这个项目记着「谓词里的布尔取反编译能过、
+    /// 运行时可能抛『不支持的谓词』把界面打崩」，所以一律在内存里滤。
+    private var tags: [Tag] { tagsRaw.alive }
 
     var body: some View {
         Section {

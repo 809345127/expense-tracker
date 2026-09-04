@@ -22,10 +22,18 @@ struct ExpenseFormView: View {
     @Environment(PrivacyGate.self) private var gate
 
     @Query(sort: [SortDescriptor(\Tag.sortOrder), SortDescriptor(\Tag.createdAt)])
-    private var allTags: [Tag]
+    private var allTagsRaw: [Tag]
+    /// ⚠️ 墓碑过滤统一在这里做（`.alive`），下面所有用到它的地方一行都不用改。
+    /// 之所以不在 `@Query` 的 `#Predicate` 里滤：这个项目记着「谓词里的布尔取反编译能过、
+    /// 运行时可能抛『不支持的谓词』把界面打崩」，所以一律在内存里滤。
+    private var allTags: [Tag] { allTagsRaw.alive }
 
     @Query(sort: [SortDescriptor(\CategoryDef.sortOrder), SortDescriptor(\CategoryDef.createdAt)])
-    private var allCategories: [CategoryDef]
+    private var allCategoriesRaw: [CategoryDef]
+    /// ⚠️ 墓碑过滤统一在这里做（`.alive`），下面所有用到它的地方一行都不用改。
+    /// 之所以不在 `@Query` 的 `#Predicate` 里滤：这个项目记着「谓词里的布尔取反编译能过、
+    /// 运行时可能抛『不支持的谓词』把界面打崩」，所以一律在内存里滤。
+    private var allCategories: [CategoryDef] { allCategoriesRaw.alive }
 
     /// 分类管理弹层
     @State private var showingCategoryManager = false
@@ -188,7 +196,8 @@ struct ExpenseFormView: View {
                 if let editing {
                     Section {
                         Button("删除这笔记录", role: .destructive) {
-                            context.delete(editing)
+                            // ⚠️ 置墓碑，不是删行（见 Expense.markDeleted）
+                            editing.markDeleted()
                             try? context.save()
                             dismiss()
                         }
@@ -290,6 +299,7 @@ struct ExpenseFormView: View {
             editing.note = trimmedNote
             editing.tags = tags
             editing.isPrivate = isPrivate
+            editing.touch()   // ⚠️ 漏了这一句，这次编辑就同步不出去
         } else {
             let expense = Expense(amount: amount, categoryKey: effectiveCategoryKey, note: trimmedNote,
                                   date: date, isPrivate: isPrivate)

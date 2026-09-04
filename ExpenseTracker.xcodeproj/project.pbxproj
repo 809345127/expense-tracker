@@ -12,6 +12,10 @@
 		A735F170873D696762A33D94 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BAEF9EAA1FD2421408C308A3 /* Foundation.framework */; };
 		AB10000000000000000000B1 /* ExpenseTrackerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB10000000000000000000F1 /* ExpenseTrackerApp.swift */; };
 		AB10000000000000000000B2 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB10000000000000000000F2 /* Models.swift */; };
+		AB1000000000000000000D31 /* SyncSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000D32 /* SyncSettingsView.swift */; };
+		AB1000000000000000000D21 /* SyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000D22 /* SyncEngine.swift */; };
+		AB1000000000000000000D11 /* TombstoneProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000D12 /* TombstoneProbe.swift */; };
+		AB1000000000000000000D01 /* Sync.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000D02 /* Sync.swift */; };
 		AB10000000000000000000B3 /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB10000000000000000000F3 /* Components.swift */; };
 		AB10000000000000000000B4 /* ExpenseListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB10000000000000000000F4 /* ExpenseListView.swift */; };
 		AB10000000000000000000B5 /* ExpenseFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB10000000000000000000F5 /* ExpenseFormView.swift */; };
@@ -57,6 +61,10 @@
 		27DDA302DD945AA2A835BE68 /* ExpenseWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ExpenseWidget.swift; sourceTree = "<group>"; };
 		AB10000000000000000000F1 /* ExpenseTrackerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpenseTrackerApp.swift; sourceTree = "<group>"; };
 		AB10000000000000000000F2 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		AB1000000000000000000D32 /* SyncSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettingsView.swift; sourceTree = "<group>"; };
+		AB1000000000000000000D22 /* SyncEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncEngine.swift; sourceTree = "<group>"; };
+		AB1000000000000000000D12 /* TombstoneProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TombstoneProbe.swift; sourceTree = "<group>"; };
+		AB1000000000000000000D02 /* Sync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync.swift; sourceTree = "<group>"; };
 		AB10000000000000000000F3 /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
 		AB10000000000000000000F4 /* ExpenseListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpenseListView.swift; sourceTree = "<group>"; };
 		AB10000000000000000000F5 /* ExpenseFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpenseFormView.swift; sourceTree = "<group>"; };
@@ -119,6 +127,10 @@
 			children = (
 				AB10000000000000000000F1 /* ExpenseTrackerApp.swift */,
 				AB10000000000000000000F2 /* Models.swift */,
+				AB1000000000000000000D32 /* SyncSettingsView.swift */,
+				AB1000000000000000000D22 /* SyncEngine.swift */,
+				AB1000000000000000000D12 /* TombstoneProbe.swift */,
+				AB1000000000000000000D02 /* Sync.swift */,
 				AB10000000000000000000F3 /* Components.swift */,
 				AB10000000000000000000F4 /* ExpenseListView.swift */,
 				AB10000000000000000000F5 /* ExpenseFormView.swift */,
@@ -264,6 +276,10 @@
 			files = (
 				AB10000000000000000000B1 /* ExpenseTrackerApp.swift in Sources */,
 				AB10000000000000000000B2 /* Models.swift in Sources */,
+				AB1000000000000000000D31 /* SyncSettingsView.swift in Sources */,
+				AB1000000000000000000D21 /* SyncEngine.swift in Sources */,
+				AB1000000000000000000D11 /* TombstoneProbe.swift in Sources */,
+				AB1000000000000000000D01 /* Sync.swift in Sources */,
 				AB10000000000000000000B3 /* Components.swift in Sources */,
 				AB10000000000000000000B4 /* ExpenseListView.swift in Sources */,
 				AB10000000000000000000B5 /* ExpenseFormView.swift in Sources */,

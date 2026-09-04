@@ -25,6 +25,44 @@ final class Expense {
     /// 否则关系可能建不上。统一在插入之后 `expense.tags = [...]`。
     var tags: [Tag] = []
 
+    // MARK: 多设备同步用的三个字段（2026-09-04 加）
+    //
+    // 协议在 `server/README.md`，安卓端实现的是同一套，改这里要同时改那边。
+    // ⚠️ 三个都必须有默认值：这是 SwiftData 自动轻量迁移的硬要求，
+    //    没默认值的新字段迁移不了、老库一打开就崩（这个项目已经栽过一次）。
+
+    /// 同步用的稳定 id（协议里的 `id`）。**建好之后一辈子不变。**
+    ///
+    /// ⚠️ 不能用 `persistentModelID` 顶替：那是本地自增的，两台设备各自从头开始，
+    /// 一合并必然张冠李戴。
+    /// ⚠️ 老库里的记录升上来时是空串，靠 `SyncBackfill` 在首次启动时补上 UUID。
+    var syncID: String = ""
+
+    /// 这条记录最后一次被改动的时刻（协议里的 `updated_at`）。合并冲突时用它判谁赢。
+    /// ⚠️ 默认值要写 `Date.now` 这种完整形式，写 `.now` 过不了 `@Model` 宏。
+    var updatedAt: Date = Date.now
+
+    /// 删除墓碑（协议里的 `deleted`）。**删除 = 把这个置 true，不是把行删掉** ——
+    /// 真删行的话，另一台设备下次同步会把它原样送回来。
+    ///
+    /// ⚠️ 界面上一律不该看到墓碑。过滤统一在 `Array<Expense>.alive` 里做，
+    /// 别在各个 `@Query` 上加 `#Predicate` —— 这个项目记着「谓词里的布尔取反
+    /// 编译能过、运行时可能抛『不支持的谓词』把界面打崩」。
+    var tombstone: Bool = false
+
+    /// 有未推送的本地改动（协议里客户端侧的 `dirty`）。**只在本地用，不上传。**
+    ///
+    /// ⚠️⚠️ 默认值是 **true**，这是刻意的 —— 它就是「从同步之前的版本升上来」的钩子：
+    /// SwiftData 轻量迁移给新字段填的是这里的默认值，所以老库里那些记录一升上来
+    /// 就自带「待推送」，第一次同步会全部推给服务器（手机是初始真相）。
+    /// 从服务器拉下来的记录会在合并时被显式置成 false，所以不会来回互推。
+    ///
+    /// 我第一版把它写成 false、另外用「updatedAt == createdAt」去判「从没同步过」——
+    /// 那个条件**永远不成立**，因为迁移填进去的 updatedAt 是迁移那一刻的时间、
+    /// 不等于 createdAt。症状是**分类一条都没推上去**（账目和标签靠 syncID 空不空判，
+    /// 所以它们是对的），另一台设备拉到账目却没有分类、列表全是灰问号。
+    var needsPush: Bool = true
+
     init(amount: Decimal, categoryKey: String, note: String = "",
          date: Date = .now, isPrivate: Bool = false) {
         self.amount = amount
@@ -33,6 +71,22 @@ final class Expense {
         self.date = date
         self.createdAt = .now
         self.isPrivate = isPrivate
+        self.syncID = UUID().uuidString
+        self.updatedAt = .now
+        self.needsPush = true
+    }
+
+    /// 本地改动之后调一次：盖时间戳 + 标记待推送。
+    /// ⚠️ 任何改 `Expense` 字段的地方都要调它，漏了那次改动就同步不出去。
+    func touch() {
+        updatedAt = .now
+        needsPush = true
+    }
+
+    /// 删除（置墓碑）。⚠️ 不要用 `context.delete(...)`
+    func markDeleted() {
+        tombstone = true
+        touch()
     }
 
     /// 列表行主标题：有备注显示备注，否则显示分类名。
@@ -71,11 +125,35 @@ final class Tag {
     /// 反向关系。删掉标签时 SwiftData 只解除关联，不会连带删记录
     @Relationship(inverse: \Expense.tags) var expenses: [Expense] = []
 
+    // MARK: 同步字段（说明见 Expense 上那一组）
+    //
+    /// ⚠️ 标签的同步 id 必须是 UUID，**不能用名字**：标签可以改名，
+    /// 用名字当 id 会让改名之后所有关联失联。
+    /// （分类恰好相反 —— 它的 id 就是永不改的代号 key，见 CategoryDef）
+    var syncID: String = ""
+    var updatedAt: Date = Date.now
+    var tombstone: Bool = false
+    /// ⚠️ 默认 true，理由见 Expense.needsPush 上那段
+    var needsPush: Bool = true
+
     init(name: String, colorIndex: Int = 0, sortOrder: Int = 0) {
         self.name = Tag.cleanedName(name)
         self.colorIndex = colorIndex
         self.sortOrder = sortOrder
         self.createdAt = .now
+        self.syncID = UUID().uuidString
+        self.updatedAt = .now
+        self.needsPush = true
+    }
+
+    func touch() {
+        updatedAt = .now
+        needsPush = true
+    }
+
+    func markDeleted() {
+        tombstone = true
+        touch()
     }
 
     var color: Color { TagPalette.color(at: colorIndex) }
@@ -225,8 +303,25 @@ extension Array where Element == Expense {
     /// 编译能过但运行时可能抛『不支持的谓词』、把整个界面打崩」。
     /// 按标签筛选也是同样的理由在内存里做的。一年几千笔，成本可以忽略。
     func visible(unlocked: Bool) -> [Expense] {
-        unlocked ? self : filter { $0.isPrivate == false }
+        let live = alive
+        return unlocked ? live : live.filter { $0.isPrivate == false }
     }
+
+
+
+    /// 摘掉删除墓碑（`tombstone == true` 的那些行）。
+    ///
+    /// ⚠️⚠️ **墓碑一旦漏进任何一个界面，就是「删了的账又冒出来」。**
+    /// 之所以放在这里、而不是往 13 处 `@Query` 上各加一个 `#Predicate`：
+    ///   ① 那 13 处早晚会漏一处，而这个 bug 只在「删过东西之后」才复现，平时看不出来；
+    ///   ② 这个项目已经记着「谓词里的布尔取反编译能过、运行时可能抛
+    ///      『不支持的谓词』把整个界面打崩」。
+    /// 代价是 `@Query` 仍然会把墓碑读进内存 —— 一年几千笔，无所谓。
+    ///
+    /// ⚠️ 有**两处**故意不走 `visible(unlocked:)`、必须自己带上 `.alive`：
+    ///   · 分类管理页判「这个分类能不能删」时要数**全部**记录（含私密），见 CategoryManagerView
+    ///   · 标签页显示「这个标签用在几笔上」走的是关系 `tag.expenses`，不是查询
+    var alive: [Expense] { filter { $0.tombstone == false } }
 
     /// 按天分组，天倒序；组内保持原顺序（也就是查询给的记账时间倒序）。
     /// 明细页和导出长图共用这一份 —— 分开写的话迟早分叉，图和界面对不上。
@@ -240,6 +335,17 @@ extension Array where Element == Expense {
             return (day, items, items.amountSum)
         }
     }
+}
+
+extension Array where Element == Tag {
+    /// 摘掉删除墓碑。标签列表（选择器、筛选面板）都要过这一层
+    var alive: [Tag] { filter { $0.tombstone == false } }
+}
+
+extension Array where Element == CategoryDef {
+    /// 摘掉删除墓碑。⚠️ `CategoryCatalog` 的构造里已经过了这一层，
+    /// 从 catalog 取分类的地方不用再过一次；直接消费 `@Query` 结果的地方要过
+    var alive: [CategoryDef] { filter { $0.tombstone == false } }
 }
 
 // MARK: - 分类
