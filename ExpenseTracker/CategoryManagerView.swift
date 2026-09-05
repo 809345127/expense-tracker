@@ -159,6 +159,7 @@ struct CategoryManagerView: View {
         // ⚠️ 每条都要 touch：排序也是要同步出去的改动（安卓那边的顺序要跟着变）
         for (i, c) in reordered.enumerated() { c.sortOrder = i; c.touch() }
         try? context.save()
+        SyncEngine.shared.syncSoon(context.container)
     }
 
     // MARK: 删除
@@ -174,6 +175,7 @@ struct CategoryManagerView: View {
             c.markDeleted()
         }
         try? context.save()
+        SyncEngine.shared.syncSoon(context.container)
     }
 
     /// 能删就返回 nil，不能删返回给用户看的原因
@@ -341,6 +343,7 @@ struct CategoryEditorView: View {
             ))
         }
         try? context.save()
+        SyncEngine.shared.syncSoon(context.container)
         dismiss()
     }
 

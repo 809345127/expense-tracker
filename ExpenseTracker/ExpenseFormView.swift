@@ -199,6 +199,7 @@ struct ExpenseFormView: View {
                             // ⚠️ 置墓碑，不是删行（见 Expense.markDeleted）
                             editing.markDeleted()
                             try? context.save()
+                            SyncEngine.shared.syncSoon(context.container)
                             dismiss()
                         }
                         .frame(maxWidth: .infinity)
@@ -309,6 +310,7 @@ struct ExpenseFormView: View {
         }
         // SwiftData 的自动保存要等主线程空闲，用户从后台划掉 app 时可能来不及；这里立刻落盘
         try? context.save()
+        SyncEngine.shared.syncSoon(context.container)
         dismiss()
     }
 }

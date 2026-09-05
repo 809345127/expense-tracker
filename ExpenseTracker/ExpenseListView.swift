@@ -204,6 +204,7 @@ private struct ExpenseList: View {
                                     // ⚠️ 置墓碑，不是删行。真删的话另一台设备下次同步会把它送回来
                                     expense.markDeleted()
                                     try? context.save()
+                                    SyncEngine.shared.syncSoon(context.container)
                                 } label: {
                                     Label("删除", systemImage: "trash")
                                 }

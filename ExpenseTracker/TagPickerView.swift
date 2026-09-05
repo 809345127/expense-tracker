@@ -187,6 +187,7 @@ struct TagPickerView: View {
         // ⚠️ 必须先 save 再取 persistentModelID：没落盘之前拿到的是临时 ID，
         // 落盘后会被换成永久 ID，早取到的那个就成了对不上的野 ID。
         try? context.save()
+        SyncEngine.shared.syncSoon(context.container)
         selection.insert(tag.persistentModelID)
         search = ""
     }
@@ -204,6 +205,7 @@ struct TagPickerView: View {
         tag.name = cleaned
         tag.touch()   // ⚠️ 漏了这一句，改名就同步不出去
         try? context.save()
+        SyncEngine.shared.syncSoon(context.container)
     }
 
     private func confirmDelete() {
@@ -215,6 +217,7 @@ struct TagPickerView: View {
         for e in tag.expenses { e.tags.removeAll { $0.persistentModelID == tag.persistentModelID }; e.touch() }
         tag.markDeleted()
         try? context.save()
+        SyncEngine.shared.syncSoon(context.container)
         pendingDelete = nil
     }
 }

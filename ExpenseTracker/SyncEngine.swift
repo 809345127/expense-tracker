@@ -196,6 +196,28 @@ final class SyncEngine {
     var state: State = .idle
     private var inFlight = false
 
+    /// 本地写完之后催一次同步。**对位安卓那边的 `Repository.syncSoon()`。**
+    ///
+    /// ⚠️ 不 await —— 记一笔这个动作不该被网络拖住。没网就安静地失败，
+    /// 等下次切到前台、或者手动同步再补上（`syncNow` 自带互斥，不会打架）。
+    ///
+    /// ⚠️⚠️ **每一处「用户改了数据」的写入之后都要调一次。**
+    /// iOS 这边没有安卓 `Repository` 那样的单一漏斗 —— 写操作散在各个 View 里，
+    /// 所以只能逐处调。**漏一处的症状是「那一类改动要等下次打开 app 才传出去」，
+    /// 而且完全不报错**：另一台设备上就是单纯的「少了一笔」。
+    /// 现有调用点（改动时一并维护这张表）：
+    ///   · `ExpenseFormView`      记一笔 / 编辑保存、删除
+    ///   · `ExpenseListView`      左滑删除
+    ///   · `CategoryManagerView`  拖动排序、删除、新建/编辑分类
+    ///   · `TagPickerView`        新建标签、改名、删除
+    ///
+    /// ⚠️ **同步引擎自己的写入绝对不要调这个**（`Sync.swift` 里的对账、`merge`、
+    /// 以及种默认分类）—— 那会变成自己触发自己。
+    func syncSoon(_ container: ModelContainer) {
+        guard SyncConfig.isConfigured else { return }
+        Task { await syncNow(container) }
+    }
+
     /// 手动/自动都走这一个入口。
     /// ⚠️ 自带互斥：同时来两次（比如刚记完一笔又切回前台）不会打架
     func syncNow(_ container: ModelContainer) async {
