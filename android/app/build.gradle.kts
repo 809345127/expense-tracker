@@ -44,7 +44,14 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        // 开发期的默认值，装到手机上可以在设置页里改
+        // 默认的服务器地址 / token。装到手机上之后也可以在「同步设置」页里改。
+        //
+        // ⚠️⚠️ **debug 和 release 用两套，不能共用一套。**
+        // debug 跑在模拟器上，地址是 `10.0.2.2:<本机测试服务>`；
+        // release 装在真手机上，地址是真的 VPS。
+        // 共用一套的话必然出事：要么调试时**误连生产**（模拟器里那点假数据会被推到
+        // 真服务器上，跟真账目混在一起），要么发到手机上的包指着一个手机根本
+        // 访问不到的 10.0.2.2 —— 而后者的症状只是「同步一直不成功」，很难一眼看出来。
         buildConfigField("String", "DEFAULT_SYNC_URL", "\"${localProps.getProperty("sync.url", "")}\"")
         buildConfigField("String", "DEFAULT_SYNC_TOKEN", "\"${localProps.getProperty("sync.token", "")}\"")
     }
@@ -71,6 +78,14 @@ android {
             if (rootProject.file("keystore.jks").exists()) {
                 signingConfig = signingConfigs.getByName("selfsigned")
             }
+            // ⚠️ release 用**真 VPS 的地址和 token**（见 defaultConfig 那段注释）。
+            // 没在 local.properties 里配 `sync.url.release` 时故意留空 ——
+            // 留空只是「装上去要自己粘一次」，而错误地沿用 debug 那个 10.0.2.2
+            // 是一个手机永远连不上、却看不出原因的坑。
+            buildConfigField("String", "DEFAULT_SYNC_URL",
+                "\"${localProps.getProperty("sync.url.release", "")}\"")
+            buildConfigField("String", "DEFAULT_SYNC_TOKEN",
+                "\"${localProps.getProperty("sync.token.release", "")}\"")
         }
         debug {
             applicationIdSuffix = ".debug"
