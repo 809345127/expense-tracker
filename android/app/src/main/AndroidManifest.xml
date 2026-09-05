@@ -6,6 +6,13 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
+    <!-- android:enableOnBackInvokedCallback = 预测式返回（Android 14+ 那个
+         「按住返回能先瞄见上一屏」的手势）。显式写出来，不靠「targetSdk 到某个版本之后
+         默认打开」那条隐含规则 —— 那条规则每隔几个版本就变一次，写死在这里，以后升
+         targetSdk 时行为不会悄悄改。返回全走 Compose 的 BackHandler，两套派发机制都兼容。
+         ⚠️ 注意这条注释的位置：XML **属性之间不能插注释**，插进 <application 的属性列表里
+         会让整个 manifest 解析失败，而 Gradle 报的是 manifest merger 异常，
+         跟 Kotlin 编译错误长得完全不一样（我为此装了一次旧包还以为代码没生效）。 -->
     <application
         android:name=".App"
         android:label="记账本"
@@ -13,6 +20,7 @@
         android:allowBackup="true"
         android:supportsRtl="true"
         android:networkSecurityConfig="@xml/network_security_config"
+        android:enableOnBackInvokedCallback="true"
         android:theme="@style/Theme.App">
 
         <activity
