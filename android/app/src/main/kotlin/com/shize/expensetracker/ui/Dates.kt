@@ -37,6 +37,26 @@ fun LocalDate.dayTitle(): String {
 
 fun Long.timeText(): String = Instant.ofEpochMilli(this).atZone(zone).format(timeFmt)
 
+private val fullDayFmt = DateTimeFormatter.ofPattern("yyyy年M月d日", Locale.CHINA)
+
+/// 表单里那一行「2026年9月5日」。带年份 —— 补记的账可能跨年，不带年会看不出来
+fun Long.dateText(): String = Instant.ofEpochMilli(this).atZone(zone).format(fullDayFmt)
+
+/// 毫秒时间戳 → 本地日期时间的各个部分，给日期/时间选择器当初值
+fun Long.localDateTime(): java.time.LocalDateTime =
+    Instant.ofEpochMilli(this).atZone(zone).toLocalDateTime()
+
+/// 把「某一天」和「某个时刻」拼回毫秒时间戳。
+///
+/// ⚠️ **秒是从 `keepSecondsFrom` 那个时间戳里继承下来的**，不清成 0。
+/// 理由：Material 的 `TimePicker` 只给时和分，而这个 app 的列表行显示到秒
+///（iOS 那边也显示到秒，两端一致）。清成 0 的话，「当场记一笔、顺手把时间往前调五分钟」
+/// 这个动作会把秒抹掉、看着像整点整分录的假数据。影响面最多 59 秒，继承更诚实。
+fun composeTimestamp(date: LocalDate, hour: Int, minute: Int, keepSecondsFrom: Long): Long {
+    val secs = Instant.ofEpochMilli(keepSecondsFrom).atZone(zone).second
+    return date.atTime(hour, minute, secs).atZone(zone).toInstant().toEpochMilli()
+}
+
 /// 这笔账是不是"事后补记的"：创建时间比记账时间晚很多。
 /// ⚠️ 判据跟 iOS 对齐 —— 当场记的账两个时间只差几十秒，那种情况不显示创建时间（纯噪音）
 fun isBackfilled(date: Long, createdAt: Long): Boolean = createdAt - date > 10 * 60 * 1000

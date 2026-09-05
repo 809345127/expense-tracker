@@ -2,6 +2,7 @@ package com.shize.expensetracker
 
 import android.app.Application
 import com.shize.expensetracker.data.AppDatabase
+import com.shize.expensetracker.data.ExpenseFilter
 import com.shize.expensetracker.data.Repository
 import com.shize.expensetracker.data.Settings
 import com.shize.expensetracker.sync.SyncWorker
@@ -26,6 +27,14 @@ class App : Application() {
     /// 提到 App 级当 `@Binding` 传下去的做法。各存一份的话，在明细页翻到 7 月、
     /// 切到统计页却还是 8 月，两个页面对不上。
     val month = MutableStateFlow(YearMonth.now())
+
+    /// 当前的筛选条件（分类 + 标签）。**全 app 只有这一套**，跟 month 一样提到这里。
+    ///
+    /// 为什么不放在明细页的 ViewModel 里：统计页点某一行要能**下钻**到明细
+    /// —— 那个动作就是「往这一套条件里填值，然后切到明细 tab」。
+    /// 条件存在明细页自己身上的话，统计页够不着它，就得再造一套传递机制。
+    /// 对位 iOS：那边 `filter` 提在根视图上、用 `@Binding` 传给两页。
+    val filter = MutableStateFlow(ExpenseFilter.none)
 
     override fun onCreate() {
         super.onCreate()

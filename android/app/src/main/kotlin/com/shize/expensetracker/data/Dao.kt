@@ -83,6 +83,12 @@ interface TagDao {
     @Query("SELECT * FROM tag WHERE deleted = 0 ORDER BY sortOrder, createdAt")
     fun observeAll(): Flow<List<TagEntity>>
 
+    /// 一次性取全部（新建 / 改名时查重、算配色下标和排序用）。
+    /// ⚠️ 查重**不在 SQL 里做**：iOS 那边用的是 comparisonKey（忽略大小写、全角半角、变音符号），
+    /// SQLite 的 = 比较做不到同一套折叠，两端算法差一点就会放进两个「一样」的标签
+    @Query("SELECT * FROM tag WHERE deleted = 0 ORDER BY sortOrder, createdAt")
+    suspend fun all(): List<TagEntity>
+
     /// 合并时用来处理「两台设备各自建了同名标签」：按清理后的名字找同名的
     @Query("SELECT * FROM tag WHERE deleted = 0 AND name = :name")
     suspend fun findByName(name: String): List<TagEntity>

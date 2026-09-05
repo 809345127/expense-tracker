@@ -14,6 +14,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Event
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Sell
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -34,8 +37,11 @@ import com.shize.expensetracker.App
 import com.shize.expensetracker.hasDeviceLock
 import com.shize.expensetracker.data.CategoryEntity
 import com.shize.expensetracker.data.ExpenseEntity
+import com.shize.expensetracker.data.TagEntity
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.ZoneId
 
 class ExpenseFormViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = App.from(app).repository
@@ -43,19 +49,38 @@ class ExpenseFormViewModel(app: Application) : AndroidViewModel(app) {
     val categories: StateFlow<List<CategoryEntity>> =
         repo.observeCategories().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
+    /// ⚠️ 含已归档的：历史账目上挂着的归档标签，编辑时要能显示出名字
+    val tags: StateFlow<List<TagEntity>> =
+        repo.observeAllTags().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /// 编辑一笔已有的账时，把它现在挂着的标签读出来当初值。
+    /// ⚠️ 用 `.first()` 现查一次，不订阅 Flow：这是**命令式**路径（进页面时取一次初值），
+    /// 订阅的话每次别处改了关联都会把用户正在编辑的选择冲掉。
+    /// （这个项目在导出页踩过反面的坑：`WhileSubscribed` 的 StateFlow 没人 collect 时
+    ///  永远停在初始值，导出的 CSV 标签列全是空的、还不报错。）
+    fun loadTags(expenseId: String, into: (Set<String>) -> Unit) = viewModelScope.launch {
+        into(repo.tagIdsOf(expenseId).toSet())
+    }
+
     fun save(
         editing: ExpenseEntity?, amountText: String, categoryKey: String,
-        note: String, isPrivate: Boolean, done: () -> Unit,
+        note: String, isPrivate: Boolean, date: Long, tagIds: Set<String>,
+        done: () -> Unit,
     ) = viewModelScope.launch {
         // ⚠️ 金额一定要走 parseAmount：解析不出来就**不保存**，绝不写 0
-        //（把一笔账静默变成 0 元比保存失败恶劣得多，见 Money.kt 顶部那段）
+        //（把一笔账静默变成 0 元比保存失败恶劣得多，见 Money.kt 顶部）
         val amount = parseAmount(amountText) ?: return@launch
         if (categoryKey.isEmpty()) return@launch
         if (editing == null) {
-            repo.addExpense(amount, categoryKey, note.trim(), isPrivate = isPrivate)
+            repo.addExpense(amount, categoryKey, note.trim(),
+                            date = date, isPrivate = isPrivate, tagIds = tagIds.toList())
         } else {
             repo.updateExpense(editing, amount = amount, categoryKey = categoryKey,
-                               note = note.trim(), isPrivate = isPrivate)
+                               note = note.trim(), date = date, isPrivate = isPrivate)
+            // ⚠️ 标签是**独立记录**，不跟着账目那条一起走 —— 必须单独调一次。
+            // setTags 会把多出来的置墓碑、少的建出来（取消一个标签也得留墓碑，
+            // 否则另一台设备察觉不到，因为账目那条记录的字段一个都没变）
+            repo.setTags(editing.id, tagIds.toList())
         }
         done()
     }
@@ -67,6 +92,11 @@ class ExpenseFormViewModel(app: Application) : AndroidViewModel(app) {
 }
 
 /// 「记一笔」/ 编辑。
+///
+/// 2026-09-05 补了两样**原来没有**的东西：
+///   ① **日期和时间可以改了** —— 在这之前安卓只能记「此刻」，等于**补记不了账**
+///      （而列表里那个「· 补记」标记因此永远不可能出现在安卓记的账上）。iOS 一直有。
+///   ② **标签可以打了** —— 在这之前安卓端标签只有数据层，界面上一个入口都没有。
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ExpenseFormScreen(
@@ -75,6 +105,7 @@ fun ExpenseFormScreen(
     vm: ExpenseFormViewModel = viewModel(),
 ) {
     val categories by vm.categories.collectAsStateWithLifecycle()
+    val allTags by vm.tags.collectAsStateWithLifecycle()
 
     var amountText by remember {
         mutableStateOf(editing?.amount?.toPlainString() ?: "")
@@ -82,7 +113,17 @@ fun ExpenseFormScreen(
     var note by remember { mutableStateOf(editing?.note ?: "") }
     var isPrivate by remember { mutableStateOf(editing?.isPrivate ?: false) }
     var chosenKey by remember { mutableStateOf(editing?.categoryKey ?: "") }
+    var date by remember { mutableLongStateOf(editing?.date ?: System.currentTimeMillis()) }
+    var tagIds by remember { mutableStateOf(emptySet<String>()) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var showTags by remember { mutableStateOf(false) }
+    var showDate by remember { mutableStateOf(false) }
+    var showTime by remember { mutableStateOf(false) }
+
+    // 编辑已有记录时，把它现在挂着的标签读进来当初值。只读一次
+    LaunchedEffect(editing?.id) {
+        if (editing != null) vm.loadTags(editing.id) { tagIds = it }
+    }
 
     /// 选中哪个分类 **每次渲染时现算**，不靠"先渲染再在别处补状态"。
     /// ⚠️ 这是 iOS 那边踩出来的教训：分类是库里的数据，界面第一帧还没有，
@@ -93,6 +134,7 @@ fun ExpenseFormScreen(
         else -> categories.firstOrNull()?.id ?: ""
     }
     val canSave = parseAmount(amountText) != null && effectiveKey.isNotEmpty()
+    val selectedTags = remember(allTags, tagIds) { allTags.filter { it.id in tagIds } }
 
     Scaffold(
         topBar = {
@@ -108,11 +150,16 @@ fun ExpenseFormScreen(
                                  tint = MaterialTheme.colorScheme.error)
                         }
                     }
-                    TextButton(
+                    // ⚠️ 用实心 Button 而不是原来那颗灰扑扑的 TextButton：
+                    // 这是这一页**唯一的主动作**，Material 的规矩是主动作要用填充按钮。
+                    // 原来那个禁用态几乎看不见，用户不知道为什么按不了
+                    Button(
                         onClick = {
-                            vm.save(editing, amountText, effectiveKey, note, isPrivate, onClose)
+                            vm.save(editing, amountText, effectiveKey, note, isPrivate,
+                                    date, tagIds, onClose)
                         },
                         enabled = canSave,
+                        modifier = Modifier.padding(end = 8.dp),
                     ) { Text("保存") }
                 },
             )
@@ -121,7 +168,7 @@ fun ExpenseFormScreen(
         Column(
             Modifier.padding(padding).verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             // ---- 金额 ----
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -150,7 +197,7 @@ fun ExpenseFormScreen(
             }
 
             // ---- 分类九宫格 ----
-            Text("分类", style = MaterialTheme.typography.titleSmall)
+            SectionTitle("分类")
             LazyVerticalGrid(
                 columns = GridCells.Fixed(5),
                 modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
@@ -159,6 +206,46 @@ fun ExpenseFormScreen(
             ) {
                 items(categories, key = { it.id }) { c ->
                     CategoryCell(c, selected = c.id == effectiveKey) { chosenKey = c.id }
+                }
+            }
+
+            // ---- 时间 ----
+            SectionTitle("时间")
+            Column(verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
+                PickerRow(
+                    icon = Icons.Filled.Event, label = "日期", value = date.dateText(),
+                    shape = groupedShape(0, 2), onClick = { showDate = true },
+                )
+                PickerRow(
+                    icon = Icons.Filled.Schedule, label = "时刻", value = date.timeText(),
+                    shape = groupedShape(1, 2), onClick = { showTime = true },
+                )
+            }
+
+            // ---- 标签 ----
+            SectionTitle("标签")
+            Surface(
+                onClick = { showTags = true },
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Filled.Sell, null, Modifier.size(20.dp),
+                         tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.width(12.dp))
+                    if (selectedTags.isEmpty()) {
+                        Text("点这里给它打标签（可选）",
+                             style = MaterialTheme.typography.bodyMedium,
+                             color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        // ⚠️ 这里**必须全显示**（limit = null）：这一行是「我给这笔挂了哪些标签」
+                        // 的答案，收成「+N」会被读成「只能挂 N 个」（iOS 那边用户真这么问过）
+                        TagChipRow(selectedTags, limit = null, compact = false)
+                    }
                 }
             }
 
@@ -190,11 +277,61 @@ fun ExpenseFormScreen(
                              color = MaterialTheme.colorScheme.error)
                     }
                 }
+                Spacer(Modifier.width(12.dp))
                 Switch(checked = isPrivate, onCheckedChange = { isPrivate = it })
             }
 
             Spacer(Modifier.height(32.dp))
         }
+    }
+
+    if (showTags) {
+        TagPickerSheet(
+            selected = tagIds,
+            onSelectedChange = { tagIds = it },
+            onDismiss = { showTags = false },
+        )
+    }
+
+    if (showDate) {
+        val state = rememberDatePickerState(initialSelectedDateMillis = date)
+        DatePickerDialog(
+            onDismissRequest = { showDate = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    state.selectedDateMillis?.let { picked ->
+                        // ⚠️ `selectedDateMillis` 是**UTC 当天零点**（Material 的约定），
+                        // 直接当本地时间戳用会在东八区差 8 小时、日期可能整个错一天。
+                        // 正确做法：只取它的「年月日」，时刻沿用用户原来那个。
+                        val d = Instant.ofEpochMilli(picked).atZone(ZoneId.of("UTC")).toLocalDate()
+                        val t = date.localDateTime()
+                        date = composeTimestamp(d, t.hour, t.minute, keepSecondsFrom = date)
+                    }
+                    showDate = false
+                }) { Text("好") }
+            },
+            dismissButton = { TextButton(onClick = { showDate = false }) { Text("取消") } },
+        ) { DatePicker(state = state) }
+    }
+
+    if (showTime) {
+        val t = remember { date.localDateTime() }
+        val state = rememberTimePickerState(initialHour = t.hour, initialMinute = t.minute, is24Hour = true)
+        AlertDialog(
+            onDismissRequest = { showTime = false },
+            title = { Text("时刻") },
+            text = { TimePicker(state = state) },
+            confirmButton = {
+                TextButton(onClick = {
+                    date = composeTimestamp(
+                        date.localDateTime().toLocalDate(),
+                        state.hour, state.minute, keepSecondsFrom = date,
+                    )
+                    showTime = false
+                }) { Text("好") }
+            },
+            dismissButton = { TextButton(onClick = { showTime = false }) { Text("取消") } },
+        )
     }
 
     if (confirmDelete && editing != null) {
@@ -213,10 +350,46 @@ fun ExpenseFormScreen(
 }
 
 @Composable
+private fun SectionTitle(text: String) {
+    Text(text, style = MaterialTheme.typography.titleSmall,
+         modifier = Modifier.padding(start = 4.dp))
+}
+
+/// 「日期 / 时刻」那两行。左边图标 + 名字，右边当前值，整行可点。
+@Composable
+private fun PickerRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    value: String,
+    shape: androidx.compose.ui.graphics.Shape,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        shape = shape,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(icon, null, Modifier.size(20.dp),
+                 tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(12.dp))
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.weight(1f))
+            Text(value, style = MaterialTheme.typography.bodyMedium,
+                 color = MaterialTheme.colorScheme.primary)
+        }
+    }
+}
+
+@Composable
 private fun CategoryCell(c: CategoryEntity, selected: Boolean, onClick: () -> Unit) {
     val color = categoryColor(c.colorIndex)
     Column(
-        Modifier.clip(RoundedCornerShape(12.dp))
+        Modifier.clip(RoundedCornerShape(14.dp))
             .background(if (selected) color else color.copy(alpha = 0.14f))
             .clickable(onClick = onClick)
             .padding(vertical = 8.dp),

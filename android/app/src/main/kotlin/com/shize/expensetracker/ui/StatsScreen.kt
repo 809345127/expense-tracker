@@ -2,6 +2,7 @@ package com.shize.expensetracker.ui
 
 import android.app.Application
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -19,6 +20,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -29,6 +31,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.shize.expensetracker.App
 import com.shize.expensetracker.data.CategoryEntity
 import com.shize.expensetracker.data.ExpenseEntity
+import com.shize.expensetracker.data.ExpenseFilter
 import com.shize.expensetracker.data.LinkEntity
 import com.shize.expensetracker.data.TagEntity
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -51,9 +54,10 @@ import java.time.YearMonth
 //   · 按标签              = 一笔多标签时**每个标签各算一次**，所以各行会重叠、
 //                          加起来超过总支出（界面上必须写清楚，否则看着像算错了）
 //
-// ⚠️ 跟 iOS 故意不一样的一处：iOS 那边点排行的一行会**下钻**到明细页并带上筛选条件，
-// 安卓这边还没有「按分类/标签筛选」这个页面，所以这些行**不可点**。
-// 等安卓补上筛选页再接 —— 现在做成可点但点了没反应，比不可点更糟。
+// ✅ 2026-09-05：排行的每一行**可以点了**，点了下钻到明细页并带上筛选条件（跟 iOS 一致）。
+// （在这之前安卓没有筛选页，所以这些行故意做成不可点 —— 可点但点了没反应比不可点更糟。）
+// ⚠️ 下钻是把条件**换成**「只看这一个」，不是往上叠加：点第二个分类应该是「改看那个」，
+// 要两个都要就去筛选面板里选。
 
 private data class CategoryStat(
     val key: String, val name: String, val iconName: String, val colorIndex: Int,
@@ -100,6 +104,7 @@ class StatsViewModel(app: Application) : AndroidViewModel(app) {
 @Composable
 fun StatsScreen(
     onToggleLock: () -> Unit,
+    onDrillDown: (ExpenseFilter) -> Unit,
     bottomBar: @Composable () -> Unit,
     vm: StatsViewModel = viewModel(),
 ) {
@@ -115,18 +120,17 @@ fun StatsScreen(
     val tagStats = remember(expenses, tags, links, total) { tagStats(expenses, tags, links, total) }
     val dailyAvg = remember(expenses, month, total) { dailyAverage(total, month) }
 
+    val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior()
+
     Scaffold(
+        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
         topBar = {
             TopAppBar(
                 title = { Text("统计") },
-                actions = {
-                    IconButton(onClick = onToggleLock) {
-                        Icon(
-                            if (unlocked) Icons.Filled.LockOpen else Icons.Filled.Lock,
-                            contentDescription = if (unlocked) "锁上私密记录" else "解锁私密记录",
-                        )
-                    }
-                },
+                // ⚠️ 顶栏**没有锁头图标了**（2026-09-05 撤的）。界面上摆一个锁，
+                // 等于当着别人的面宣布「这儿藏了东西」。私密门的入口挪到了下面
+                // 月份标题上的「连点三下」—— 跟 iOS 同一个位置、同一个手势。
+                scrollBehavior = scroll,
             )
         },
         bottomBar = bottomBar,
@@ -137,7 +141,7 @@ fun StatsScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Spacer(Modifier.height(2.dp))
-            MonthSwitcher(month.title(), vm::prevMonth, vm::nextMonth)
+            MonthSwitcher(month.title(), unlocked, vm::prevMonth, vm::nextMonth, onToggleLock)
 
             if (expenses.isEmpty()) {
                 Box(Modifier.fillMaxWidth().padding(top = 64.dp), Alignment.Center) {
@@ -153,16 +157,34 @@ fun StatsScreen(
             } else {
                 Tiles(total = total, count = expenses.size, dailyAvg = dailyAvg)
                 Donut(catStats, total)
-                CategoryRanking(catStats)
-                if (tagStats.any { !it.untagged }) TagRanking(tagStats)
+                CategoryRanking(catStats) { onDrillDown(ExpenseFilter.onlyCategory(it)) }
+                if (tagStats.any { !it.untagged }) {
+                    TagRanking(tagStats) { id ->
+                        // ⚠️「未打标签」那一行点了没意义 —— 筛选条件表达不了「没有标签」
+                        // 这个否定条件（`tagIds` 是「命中其中任意一个」）。所以那行不给点，
+                        // 传上来的 id 是 null
+                        if (id != null) onDrillDown(ExpenseFilter.onlyTag(id))
+                    }
+                }
             }
             Spacer(Modifier.height(16.dp))
         }
     }
 }
 
+/// 月份切换器。
+///
+/// ⚠️⚠️ **私密门的入口就挂在这个标题上：连点三下**（跟明细页那张主卡片上的是同一个手势，
+/// 两页都能进/出）。锁着 → 走指纹/密码；已经开着 → 直接锁上。
+/// 挑这个位置的理由见 `ui/Interactions.kt`：它平时就是一行普通文字、看起来完全不可点。
 @Composable
-private fun MonthSwitcher(title: String, onPrev: () -> Unit, onNext: () -> Unit) {
+private fun MonthSwitcher(
+    title: String,
+    unlocked: Boolean,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+    onSecretTap: () -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.Center,
@@ -171,7 +193,22 @@ private fun MonthSwitcher(title: String, onPrev: () -> Unit, onNext: () -> Unit)
         IconButton(onClick = onPrev) {
             Icon(Icons.Filled.ChevronLeft, "上个月")
         }
-        Text(title, style = MaterialTheme.typography.titleMedium)
+        Text(
+            title,
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier
+                .secretTripleTap(onSecretTap)
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+        )
+        // ⚠️ 解锁态要有明显标记 —— 不然自己忘了开着、随手把手机递出去就露了。
+        // 锁着的时候这里**什么都没有**，界面上一点痕迹都看不出来。
+        if (unlocked) {
+            Text(
+                "含私密",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
         IconButton(onClick = onNext) {
             Icon(Icons.Filled.ChevronRight, "下个月")
         }
@@ -180,23 +217,39 @@ private fun MonthSwitcher(title: String, onPrev: () -> Unit, onNext: () -> Unit)
 
 @Composable
 private fun Tiles(total: BigDecimal, count: Int, dailyAvg: BigDecimal) {
+    // ⚠️ 三个瓦片各用一种主题色调（primary / secondary / tertiary 的容器色），
+    // 不再是三个一样的灰盒子。这个 app 开着**动态取色**（配色跟着系统壁纸走），
+    // 而改版之前整屏只有一种灰、主色只出现在 FAB 上 —— 等于把 Material You 白开了。
+    // 这三个色调是系统按壁纸算出来的同一族，所以不会撞色、也不用自己调。
+    val cs = MaterialTheme.colorScheme
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Tile("总支出", formatYuan(total), Modifier.weight(1f))
-        Tile("笔数", "$count", Modifier.weight(1f))
-        Tile("日均", formatYuan(dailyAvg), Modifier.weight(1f))
+        Tile("总支出", formatYuan(total), cs.primaryContainer, cs.onPrimaryContainer, Modifier.weight(1f))
+        Tile("笔数", "$count", cs.secondaryContainer, cs.onSecondaryContainer, Modifier.weight(1f))
+        Tile("日均", formatYuan(dailyAvg), cs.tertiaryContainer, cs.onTertiaryContainer, Modifier.weight(1f))
     }
 }
 
 @Composable
-private fun Tile(title: String, value: String, modifier: Modifier = Modifier) {
-    Card(modifier) {
+private fun Tile(
+    title: String, value: String,
+    container: Color, onContainer: Color,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        shape = MaterialTheme.shapes.large,
+        color = container,
+        contentColor = onContainer,
+        modifier = modifier,
+    ) {
         Column(
-            Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 6.dp),
+            Modifier.fillMaxWidth().padding(vertical = 14.dp, horizontal = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+            // ⚠️ 用 LocalContentColor 带一点透明，别用 onSurfaceVariant ——
+            // 那是给「灰底」配的字色，放到有色容器上对比度会崩
             Text(title, style = MaterialTheme.typography.bodySmall,
-                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+                 color = LocalContentColor.current.copy(alpha = 0.8f))
             Text(
                 value,
                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
@@ -216,101 +269,99 @@ private fun Donut(stats: List<CategoryStat>, total: BigDecimal) {
     val colors = stats.map { categoryColor(it.colorIndex) }
     val sweeps = stats.map { it.share * 360f }
 
-    Card(Modifier.fillMaxWidth()) {
-        Box(
-            Modifier.fillMaxWidth().padding(16.dp).height(210.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Canvas(Modifier.size(200.dp)) {
-                // 环宽 = 半径的 38%（对位 iOS 的 innerRadius .ratio(0.62)）
-                val d = minOf(size.width, size.height)
-                val stroke = d * 0.19f
-                val inset = stroke / 2f
-                val arcSize = Size(d - stroke, d - stroke)
-                val topLeft = Offset((size.width - d) / 2f + inset, (size.height - d) / 2f + inset)
+    // ⚠️ 不套 Card：改版之前它被一个 210dp 高的大灰框包着，那一整块灰是整页最扎眼的地方，
+    // 而框本身不传达任何信息（环自己就是一个完整的图形）。去掉之后这一页干净很多。
+    Box(Modifier.fillMaxWidth().padding(vertical = 4.dp).height(200.dp),
+        contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(196.dp)) {
+            // 环宽 = 半径的 38%（对位 iOS 的 innerRadius .ratio(0.62)）
+            val d = minOf(size.width, size.height)
+            val stroke = d * 0.19f
+            val inset = stroke / 2f
+            val arcSize = Size(d - stroke, d - stroke)
+            val topLeft = Offset((size.width - d) / 2f + inset, (size.height - d) / 2f + inset)
 
-                // 从 12 点方向开始顺时针。⚠️ 每段之间留 1.5° 的缝（对位 iOS 的 angularInset），
-                // 相邻两块颜色接近时不留缝会糊成一片
-                var start = -90f
-                for (i in stats.indices) {
-                    val sweep = sweeps[i]
-                    if (sweep <= 0f) continue
-                    // 缝不能比这一块本身还宽，否则细分类会被画成反向的一段
-                    val gap = minOf(1.5f, sweep / 3f)
-                    drawArc(
-                        color = colors[i],
-                        startAngle = start + gap / 2f,
-                        sweepAngle = sweep - gap,
-                        useCenter = false,
-                        topLeft = topLeft,
-                        size = arcSize,
-                        style = Stroke(width = stroke),
-                    )
-                    start += sweep
-                }
+            // 从 12 点方向开始顺时针。⚠️ 每段之间留 1.5° 的缝（对位 iOS 的 angularInset），
+            // 相邻两块颜色接近时不留缝会糊成一片
+            var start = -90f
+            for (i in stats.indices) {
+                val sweep = sweeps[i]
+                if (sweep <= 0f) continue
+                // 缝不能比这一块本身还宽，否则细分类会被画成反向的一段
+                val gap = minOf(1.5f, sweep / 3f)
+                drawArc(
+                    color = colors[i],
+                    startAngle = start + gap / 2f,
+                    sweepAngle = sweep - gap,
+                    useCenter = false,
+                    topLeft = topLeft,
+                    size = arcSize,
+                    style = Stroke(width = stroke),
+                )
+                start += sweep
             }
-            Column(horizontalAlignment = Alignment.CenterHorizontally,
-                   verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("总支出", style = MaterialTheme.typography.bodySmall,
-                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(formatYuan(total),
-                     style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
-            }
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally,
+               verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("总支出", style = MaterialTheme.typography.bodySmall,
+                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(formatYuan(total),
+                 style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
         }
     }
 }
 
 @Composable
-private fun CategoryRanking(stats: List<CategoryStat>) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 4.dp)) {
-            stats.forEachIndexed { i, s ->
-                RankRow(
-                    leading = {
-                        val color = categoryColor(s.colorIndex)
-                        Box(
-                            Modifier.size(36.dp).clip(RoundedCornerShape(10.dp))
-                                .background(color.copy(alpha = 0.16f)),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(categoryIcon(s.iconName), contentDescription = null,
-                                 tint = color, modifier = Modifier.size(19.dp))
-                        }
-                    },
-                    name = s.name, count = s.count, total = s.total,
-                    share = s.share, color = categoryColor(s.colorIndex),
-                )
-                if (i != stats.lastIndex) HorizontalDivider(Modifier.padding(start = 48.dp))
-            }
-        }
-    }
-}
-
-@Composable
-private fun TagRanking(stats: List<TagStat>) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(horizontal = 14.dp)) {
-            Text("按标签", style = MaterialTheme.typography.titleSmall,
-                 modifier = Modifier.padding(top = 14.dp, bottom = 2.dp))
-            stats.forEachIndexed { i, s ->
-                val color = if (s.untagged) Color(0xFF8E8E93) else tagColor(s.colorIndex)
-                RankRow(
-                    leading = {
-                        Box(Modifier.size(10.dp).clip(CircleShape).background(color))
-                    },
-                    name = s.name, count = s.count, total = s.total,
-                    share = s.share, color = color, leadingWidth = 10.dp,
-                )
-                if (i != stats.lastIndex) HorizontalDivider(Modifier.padding(start = 22.dp))
-            }
-            // ⚠️ 这句话不能省：不写清楚重叠，这几行加起来超过总支出会让人以为算错了
-            Text(
-                "一笔可以打多个标签，所以上面各行之间会重叠、加起来会超过本月总支出。「未打标签」那行不与其它行重叠。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 6.dp, bottom = 12.dp),
+private fun CategoryRanking(stats: List<CategoryStat>, onPick: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
+        stats.forEachIndexed { i, s ->
+            RankRow(
+                leading = {
+                    val color = categoryColor(s.colorIndex)
+                    Box(
+                        Modifier.size(36.dp).clip(RoundedCornerShape(10.dp))
+                            .background(color.copy(alpha = 0.16f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(categoryIcon(s.iconName), contentDescription = null,
+                             tint = color, modifier = Modifier.size(19.dp))
+                    }
+                },
+                name = s.name, count = s.count, total = s.total,
+                share = s.share, color = categoryColor(s.colorIndex),
+                shape = groupedShape(i, stats.size),
+                // 点一行 → 明细页只看这个分类（2026-09-05 接上的，在这之前不可点）
+                onClick = { onPick(s.key) },
             )
         }
+    }
+}
+
+@Composable
+private fun TagRanking(stats: List<TagStat>, onPick: (String?) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
+        Text("按标签", style = MaterialTheme.typography.titleSmall,
+             modifier = Modifier.padding(start = 4.dp, top = 4.dp, bottom = 6.dp))
+        stats.forEachIndexed { i, s ->
+            val color = if (s.untagged) MaterialTheme.colorScheme.outline else tagColor(s.colorIndex)
+            RankRow(
+                leading = {
+                    Box(Modifier.size(10.dp).clip(CircleShape).background(color))
+                },
+                name = s.name, count = s.count, total = s.total,
+                share = s.share, color = color, leadingWidth = 10.dp,
+                shape = groupedShape(i, stats.size),
+                // ⚠️「未打标签」那行不给点：筛选条件表达不了「没有标签」这个否定条件
+                onClick = if (s.untagged) null else ({ onPick(s.id) }),
+            )
+        }
+        // ⚠️ 这句话不能省：不写清楚重叠，这几行加起来超过总支出会让人以为算错了
+        Text(
+            "一笔可以打多个标签，所以上面各行之间会重叠、加起来会超过本月总支出。「未打标签」那行不与其它行重叠。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 4.dp, end = 4.dp, top = 8.dp),
+        )
     }
 }
 
@@ -318,10 +369,19 @@ private fun TagRanking(stats: List<TagStat>) {
 private fun RankRow(
     leading: @Composable () -> Unit,
     name: String, count: Int, total: BigDecimal, share: Float, color: Color,
+    shape: androidx.compose.ui.graphics.Shape,
     leadingWidth: androidx.compose.ui.unit.Dp = 36.dp,
+    /// null = 这一行不可点（「未打标签」那行）。可点的行有涟漪反馈，一试就知道
+    onClick: (() -> Unit)? = null,
 ) {
+    Surface(
+        shape = shape,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = if (onClick != null) Modifier.fillMaxWidth().clickable(onClick = onClick)
+                   else Modifier.fillMaxWidth(),
+    ) {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.width(leadingWidth), contentAlignment = Alignment.Center) { leading() }
@@ -350,6 +410,7 @@ private fun RankRow(
                      modifier = Modifier.width(34.dp))
             }
         }
+    }
     }
 }
 

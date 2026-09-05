@@ -6,6 +6,8 @@ import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.PieChart
@@ -14,10 +16,12 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.shize.expensetracker.data.ExpenseEntity
+import com.shize.expensetracker.data.ExpenseFilter
 import com.shize.expensetracker.sync.SyncWorker
 import com.shize.expensetracker.ui.*
 import com.shize.expensetracker.ui.theme.AppTheme
@@ -26,7 +30,8 @@ import kotlinx.coroutines.launch
 /// 单 Activity + 全 Compose，没有一行 XML 布局（安卓官方推荐的写法）。
 ///
 /// 导航仍然是一个 sealed interface + `when` 手写，没引 Navigation 库：
-/// 目的地只有六个、回退关系是一层（都从首页推出去），手写的活动件更少。
+/// 目的地只有七个、回退关系是一层（都从首页推出去），手写的活动件更少。
+/// 转场是 2026-09-05 加的（原来是硬切，没有任何过渡）—— 见 `ui/Motion.kt`。
 ///
 /// ⚠️ **这个 Activity 必须是 `FragmentActivity`，不能是 `ComponentActivity`**：
 /// `BiometricPrompt` 的构造函数只收 FragmentActivity / Fragment
@@ -35,11 +40,15 @@ import kotlinx.coroutines.launch
 class MainActivity : FragmentActivity() {
 
     private sealed interface Screen {
-        data object Home : Screen
-        data object Sync : Screen
-        data object Categories : Screen
-        data object Export : Screen
-        data class Form(val editing: ExpenseEntity?) : Screen
+        /// 层级深度：转场要靠它判断是「往里进」还是「往回退」。首页 0，推出去的页面 1。
+        val depth: Int
+
+        data object Home : Screen { override val depth = 0 }
+        data object Sync : Screen { override val depth = 1 }
+        data object Categories : Screen { override val depth = 1 }
+        data object Tags : Screen { override val depth = 1 }
+        data object Export : Screen { override val depth = 1 }
+        data class Form(val editing: ExpenseEntity?) : Screen { override val depth = 1 }
     }
 
     private enum class Tab { List, Stats }
@@ -57,12 +66,14 @@ class MainActivity : FragmentActivity() {
     /// 用 State 而不是直接改导航状态：onNewIntent 可能在 Compose 还没组合时就来了
     private val pendingAdd = mutableStateOf(false)
 
+    @OptIn(ExperimentalAnimationApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         pendingAdd.value = intent?.action == ACTION_ADD
 
-        val gate = App.from(this).gate
+        val app = App.from(this)
+        val gate = app.gate
 
         setContent {
             AppTheme {
@@ -88,6 +99,8 @@ class MainActivity : FragmentActivity() {
                     }
                 }
 
+                /// 私密门开关。挂在「连点三下月份标题」上（明细页和统计页都有）。
+                /// ⚠️ 界面上**没有**任何常驻的锁头按钮 —— 有按钮就等于告诉别人这儿有东西。
                 val toggleLock: () -> Unit = {
                     if (unlocked) gate.lock()
                     else lifecycleScope.launch { gate.unlock(this@MainActivity) }
@@ -116,29 +129,55 @@ class MainActivity : FragmentActivity() {
                 // 只在推出去的页面上拦；首页不拦（首页按返回退出 app 才是对的）。
                 BackHandler(enabled = screen != Screen.Home) { screen = Screen.Home }
 
-                when (val s = screen) {
-                    Screen.Home -> when (tab) {
-                        Tab.List -> ExpenseListScreen(
-                            onOpenSync = { screen = Screen.Sync },
-                            onOpenCategories = { screen = Screen.Categories },
-                            onOpenExport = { screen = Screen.Export },
-                            onToggleLock = toggleLock,
-                            onAdd = { screen = Screen.Form(null) },
-                            onEdit = { screen = Screen.Form(it) },
-                            bottomBar = bottomBar,
-                        )
-                        Tab.Stats -> StatsScreen(
-                            onToggleLock = toggleLock,
-                            bottomBar = bottomBar,
+                AnimatedContent(
+                    targetState = screen,
+                    transitionSpec = {
+                        // 首页 ↔ 推出去的页面：横向推进，方向跟返回手势一致
+                        pushTransform(forward = targetState.depth > initialState.depth)
+                    },
+                    label = "screen",
+                ) { s ->
+                    when (s) {
+                        Screen.Home -> AnimatedContent(
+                            targetState = tab,
+                            // 底部两个 tab 是**平级**的，用淡入淡出穿透。
+                            // 横向推进会让人以为「统计在明细右边」，而 tab 没有先后
+                            transitionSpec = { fadeThroughTransform() },
+                            label = "tab",
+                        ) { t ->
+                            when (t) {
+                                Tab.List -> ExpenseListScreen(
+                                    onOpenSync = { screen = Screen.Sync },
+                                    onOpenCategories = { screen = Screen.Categories },
+                                    onOpenTags = { screen = Screen.Tags },
+                                    onOpenExport = { screen = Screen.Export },
+                                    onToggleLock = toggleLock,
+                                    onAdd = { screen = Screen.Form(null) },
+                                    onEdit = { screen = Screen.Form(it) },
+                                    bottomBar = bottomBar,
+                                )
+                                Tab.Stats -> StatsScreen(
+                                    onToggleLock = toggleLock,
+                                    // 点排行里的某一行 → 把条件换成「只看这一个」并切回明细。
+                                    // ⚠️ 是**换**不是叠加：点第二个分类应该是「改看那个」，
+                                    // 要两个都要就去筛选面板里选（跟 iOS 同一个决定）
+                                    onDrillDown = { f: ExpenseFilter ->
+                                        app.filter.value = f
+                                        tab = Tab.List
+                                    },
+                                    bottomBar = bottomBar,
+                                )
+                            }
+                        }
+                        Screen.Sync -> SyncSettingsScreen(onBack = { screen = Screen.Home })
+                        Screen.Categories -> CategoryManagerScreen(onBack = { screen = Screen.Home })
+                        Screen.Tags -> TagManagerScreen(onBack = { screen = Screen.Home })
+                        Screen.Export -> ExportScreen(onBack = { screen = Screen.Home })
+                        is Screen.Form -> ExpenseFormScreen(
+                            editing = s.editing,
+                            onClose = { screen = Screen.Home },
                         )
                     }
-                    Screen.Sync -> SyncSettingsScreen(onBack = { screen = Screen.Home })
-                    Screen.Categories -> CategoryManagerScreen(onBack = { screen = Screen.Home })
-                    Screen.Export -> ExportScreen(onBack = { screen = Screen.Home })
-                    is Screen.Form -> ExpenseFormScreen(
-                        editing = s.editing,
-                        onClose = { screen = Screen.Home },
-                    )
                 }
             }
         }

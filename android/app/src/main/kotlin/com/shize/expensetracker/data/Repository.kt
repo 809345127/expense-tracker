@@ -156,13 +156,66 @@ class Repository(
         if (want != current) syncSoon()
     }
 
-    suspend fun addTag(name: String, colorIndex: Int): String {
+    /// 新建标签。返回新标签的 id；名字重了（按 comparisonKey 判）返回 null、不建。
+    ///
+    /// ⚠️ 配色下标按「已经有几个标签」轮着给 —— 跟 iOS `TagPalette.nextIndex(existingCount:)`
+    /// 同一条规则（`已有数量 % 色板长度`）。两端算法一致，同一个标签在两台设备上才是同一个颜色。
+    /// ⚠️ 色板长度写死 8：它是 `ui/CategoryVisuals.kt` 里 `tagColors` 的长度，也是 iOS
+    /// `TagPalette.colors` 的长度。三处必须一样，改色板要一起改。
+    suspend fun addTag(name: String): String? {
+        val clean = cleanedName(name)
+        if (clean.isEmpty()) return null
+        val existing = tags.all()
+        // ⚠️ 查重用 comparisonKey（忽略大小写/全角半角/变音符号），不是直接比字符串：
+        // 「Coffee」和「coffee」应该算同一个，不然同步过去会变成两个看着一样的标签
+        val key = comparisonKey(clean)
+        if (existing.any { comparisonKey(it.name) == key }) return null
+
         val id = UUID.randomUUID().toString()
         val t = now()
-        tags.upsert(TagEntity(id, cleanedName(name), colorIndex, sortOrder = 0,
-                              createdAt = t, updatedAt = t, dirty = true))
+        tags.upsert(
+            TagEntity(
+                id = id, name = clean,
+                colorIndex = existing.size % TAG_PALETTE_SIZE,
+                sortOrder = (existing.maxOfOrNull { it.sortOrder } ?: 0) + 1,
+                createdAt = t, updatedAt = t, dirty = true,
+            )
+        )
         syncSoon()
         return id
+    }
+
+    /// 改标签名。改成了返回 true；名字空的、或者跟**别的**标签重名，返回 false 不改。
+    ///
+    /// ⚠️ 标签的 id 是 UUID、**跟名字无关**，所以改名是安全的（分类不一样，分类的 id
+    /// 就是名字算出来的代号，那个永不能改）。这就是当初标签用 UUID、分类用代号的原因。
+    suspend fun renameTag(tag: TagEntity, newName: String): Boolean {
+        val clean = cleanedName(newName)
+        if (clean.isEmpty()) return false
+        val key = comparisonKey(clean)
+        if (tags.all().any { it.id != tag.id && comparisonKey(it.name) == key }) return false
+        // ⚠️ updatedAt + dirty 一定要一起改，漏了改名就同步不出去（iOS 那边同一个坑）
+        tags.upsert(tag.copy(name = clean, updatedAt = now(), dirty = true))
+        syncSoon()
+        return true
+    }
+
+    /// 删标签。⚠️ 置墓碑，不是删行。
+    ///
+    /// ⚠️⚠️ **必须把它的关联一条条也置墓碑**，不能只删标签那一行。
+    /// 只删标签的话，另一台设备上那些账目仍然挂着一条指向「不存在的标签」的关联 ——
+    /// 界面上看不见（查不到名字），但导出和统计会把它数进去。
+    /// iOS 那边是同一件事：SwiftData 删对象会自动解关系，**置墓碑不会**，所以要手动断。
+    ///
+    /// 删标签不像删分类那样有「用过就不给删」的限制：分类是必填的，删了账目会悬空；
+    /// 标签是可选的，删掉只是那些账目少一个标签，金额和其它内容一个都不动。
+    suspend fun deleteTag(tag: TagEntity) {
+        val t = now()
+        for (l in links.linksOfTag(tag.id)) {
+            links.upsert(l.copy(deleted = true, updatedAt = t, dirty = true))
+        }
+        tags.upsert(tag.copy(deleted = true, updatedAt = t, dirty = true))
+        syncSoon()
     }
 
     /// 新建分类。
@@ -267,6 +320,10 @@ class Repository(
         )
     }
 }
+
+/// 标签色板有几种颜色。⚠️ 必须等于 `ui/CategoryVisuals.kt` 里 `tagColors` 的长度，
+/// 也必须等于 iOS `TagPalette.colors` 的长度 —— 三处一起改，不然两端同一个标签会是两个颜色。
+private const val TAG_PALETTE_SIZE = 8
 
 data class WidgetSlice(val name: String, val amount: BigDecimal)
 
