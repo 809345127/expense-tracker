@@ -57,6 +57,21 @@ fun composeTimestamp(date: LocalDate, hour: Int, minute: Int, keepSecondsFrom: L
     return date.atTime(hour, minute, secs).atZone(zone).toInstant().toEpochMilli()
 }
 
+private val stampFmt = DateTimeFormatter.ofPattern("MM-dd HH:mm:ss", Locale.CHINA)
+private val fullStampFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
+
+/// 补记时那一行要显示的「创建时间」。
+///
+/// ⚠️ **同年只写月日，跨年才补上年份** —— 跟 iOS 一模一样，而且这个分情况是有原因的：
+/// 列表上唯一的年份锚点是顶部那张月份卡片。12 月 31 日花的钱、元旦凌晨才补记时，
+/// 只写 `01-01` 会被读成同一年的 1 月 1 日 —— 看着像「钱还没花就先建了记录」，
+/// 把创建时间的意义整个读反。
+fun createdStampText(date: Long, createdAt: Long): String {
+    val d = Instant.ofEpochMilli(date).atZone(zone)
+    val c = Instant.ofEpochMilli(createdAt).atZone(zone)
+    return c.format(if (d.year == c.year) stampFmt else fullStampFmt)
+}
+
 /// 这笔账是不是"事后补记的"：创建时间比记账时间晚很多。
 /// ⚠️ 判据跟 iOS 对齐 —— 当场记的账两个时间只差几十秒，那种情况不显示创建时间（纯噪音）
 fun isBackfilled(date: Long, createdAt: Long): Boolean = createdAt - date > 10 * 60 * 1000

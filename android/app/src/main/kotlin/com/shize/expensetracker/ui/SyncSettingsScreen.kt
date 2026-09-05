@@ -29,6 +29,7 @@ fun SyncSettingsScreen(onBack: () -> Unit, vm: SyncViewModel = viewModel()) {
     val savedToken by vm.token.collectAsStateWithLifecycle()
     val lastSyncAt by vm.lastSyncAt.collectAsStateWithLifecycle()
     val lastError by vm.lastError.collectAsStateWithLifecycle()
+    val lastRev by vm.lastRev.collectAsStateWithLifecycle()
     val busy by vm.busy.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
     val pending by vm.pending.collectAsStateWithLifecycle()
@@ -96,6 +97,9 @@ fun SyncSettingsScreen(onBack: () -> Unit, vm: SyncViewModel = viewModel()) {
 
             Text("状态", style = MaterialTheme.typography.titleSmall)
             InfoRow("这台设备待推送", if (pending < 0) "—" else "$pending 条")
+            // ⚠️ 游标要显示出来（iOS 那边一直有，安卓漏了）：排障时它是最有用的一个数 ——
+            // 卡住不动就说明拉取那一半没在推进，而界面上其它地方都看不出来
+            InfoRow("同步游标", "$lastRev")
             InfoRow(
                 "上次同步",
                 if (lastSyncAt == 0L) "还没同步过"

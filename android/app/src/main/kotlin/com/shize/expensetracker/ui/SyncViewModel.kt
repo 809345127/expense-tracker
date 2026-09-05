@@ -19,6 +19,7 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
     val url = settings.url.stateIn(viewModelScope, SharingStarted.Eagerly, "")
     val token = settings.token.stateIn(viewModelScope, SharingStarted.Eagerly, "")
     val lastSyncAt = settings.lastSyncAt.stateIn(viewModelScope, SharingStarted.Eagerly, 0L)
+    val lastRev = settings.lastRevFlow.stateIn(viewModelScope, SharingStarted.Eagerly, 0L)
     val lastError = settings.lastError.stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
     private val _busy = MutableStateFlow(false)

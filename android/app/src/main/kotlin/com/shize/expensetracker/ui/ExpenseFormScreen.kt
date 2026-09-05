@@ -21,6 +21,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.activity.compose.BackHandler
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -44,7 +47,11 @@ import java.time.Instant
 import java.time.ZoneId
 
 class ExpenseFormViewModel(app: Application) : AndroidViewModel(app) {
-    private val repo = App.from(app).repository
+    private val appState = App.from(app)
+    private val repo = appState.repository
+
+    /// ⚠️ 表单要用它决定「私密」那一行**存不存在**（不是禁用、不是灰掉），见下面的注释
+    val unlocked: StateFlow<Boolean> = appState.gate.unlocked
 
     val categories: StateFlow<List<CategoryEntity>> =
         repo.observeCategories().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -106,13 +113,23 @@ fun ExpenseFormScreen(
 ) {
     val categories by vm.categories.collectAsStateWithLifecycle()
     val allTags by vm.tags.collectAsStateWithLifecycle()
+    val unlocked by vm.unlocked.collectAsStateWithLifecycle()
 
     var amountText by remember {
         mutableStateOf(editing?.amount?.toPlainString() ?: "")
     }
     var note by remember { mutableStateOf(editing?.note ?: "") }
-    var isPrivate by remember { mutableStateOf(editing?.isPrivate ?: false) }
     var chosenKey by remember { mutableStateOf(editing?.categoryKey ?: "") }
+    var showCategories by remember { mutableStateOf(false) }
+    val amountFocus = remember { FocusRequester() }
+
+    // 私密开关的值。null = 用户还没自己拨过。
+    //
+    // ⚠️ 「新建时默认跟随解锁态」这件事**每次渲染现算**，不在 LaunchedEffect 里事后补 ——
+    // 这个项目记着「别指望先渲染、再在 onAppear 里补状态」那条教训。现算就没有先后顺序问题。
+    // ⚠️ 为什么解锁态下新建要默认打私密：特意解锁进来多半就是为了记这一笔。
+    // 不想私密的话那一行就在眼前，拨回去即可。（跟 iOS `isPrivate = gate.isUnlocked` 一致。）
+    var privateChoice by remember { mutableStateOf(editing?.isPrivate) }
     var date by remember { mutableLongStateOf(editing?.date ?: System.currentTimeMillis()) }
     var tagIds by remember { mutableStateOf(emptySet<String>()) }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -134,6 +151,7 @@ fun ExpenseFormScreen(
         else -> categories.firstOrNull()?.id ?: ""
     }
     val canSave = parseAmount(amountText) != null && effectiveKey.isNotEmpty()
+    val isPrivate = privateChoice ?: unlocked
     val selectedTags = remember(allTags, tagIds) { allTags.filter { it.id in tagIds } }
 
     Scaffold(
@@ -192,12 +210,23 @@ fun ExpenseFormScreen(
                         focusedContainerColor = Color.Transparent,
                         unfocusedContainerColor = Color.Transparent,
                     ),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).focusRequester(amountFocus),
                 )
             }
 
+            // 新建时光标直接落在金额上、键盘自动弹出来 —— 记一笔的第一件事就是输金额，
+            // 少一次点击。⚠️ 编辑已有记录时**不要**抢焦点：那时用户多半是来改分类或备注的，
+            // 键盘弹出来反而挡住下半屏。（对位 iOS 的 `amountFocused = true`，它也只在新建时设。）
+            LaunchedEffect(Unit) { if (editing == null) amountFocus.requestFocus() }
+
             // ---- 分类九宫格 ----
-            SectionTitle("分类")
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                SectionTitle("分类")
+                Spacer(Modifier.weight(1f))
+                // 管理入口放在标题右边：它是低频操作，不该跟十几个高频的分类格子抢位置。
+                // 有了它，记账记到一半发现分类不够用时不用退出去重进（对位 iOS 那颗「管理」）
+                TextButton(onClick = { showCategories = true }) { Text("管理") }
+            }
             LazyVerticalGrid(
                 columns = GridCells.Fixed(5),
                 modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
@@ -257,6 +286,17 @@ fun ExpenseFormScreen(
             )
 
             // ---- 私密 ----
+            //
+            // ⚠️⚠️ **锁着的时候这一段必须完全不存在，不是禁用、不是灰掉。**
+            // 别人拿你手机点一下「记一笔」，只要看见「私密记录」四个字，
+            // 「界面上完全无痕」这件事就当场破功了 —— 而且比在设置里放个开关暴露得更彻底，
+            // 因为记一笔是最顺手会被点开的地方。
+            //
+            // 这跟顶栏那颗锁头图标是同一条红线（2026-09-05 撤掉的那个）。
+            // 当时只撤了顶栏、漏了这里，是用户自己发现的：
+            // 「无论是不是在私密模式下，记一笔的最下面也有『私密记录』的选项」。
+            // iOS 那边一直是对的（`if gate.isUnlocked { Toggle }`），安卓漏抄了。
+            if (unlocked) {
             Row(
                 Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -278,10 +318,22 @@ fun ExpenseFormScreen(
                     }
                 }
                 Spacer(Modifier.width(12.dp))
-                Switch(checked = isPrivate, onCheckedChange = { isPrivate = it })
+                Switch(checked = isPrivate, onCheckedChange = { privateChoice = it })
+            }
             }
 
             Spacer(Modifier.height(32.dp))
+        }
+    }
+
+    // ⚠️ 分类管理是**盖在表单上面**的一层，不是把表单替换掉。
+    // 替换掉的话表单会离开 composition，它那些 `remember`（金额、选好的标签、改过的时间）
+    // 全部失忆 —— 用户从分类管理退回来会发现自己白填了。
+    // 盖一层则表单一直在树里，状态原样保留。
+    if (showCategories) {
+        BackHandler { showCategories = false }
+        Surface(Modifier.fillMaxSize()) {
+            CategoryManagerScreen(onBack = { showCategories = false })
         }
     }
 

@@ -427,8 +427,13 @@ private fun ExpenseRow(
                          style = MaterialTheme.typography.bodySmall,
                          color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (isBackfilled(e.date, e.createdAt)) {
-                        Text(" · 补记", style = MaterialTheme.typography.bodySmall,
-                             color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        // ⚠️ 把**创建时间**也带出来（跟 iOS 一致）。只写「补记」两个字的话，
+                        // 看得出「是后补的」却看不出「什么时候补的」—— 而对账时想知道的
+                        // 恰恰是后者（这笔到底拖了多久才记）
+                        Text(" · 补记于 ${createdStampText(e.date, e.createdAt)}",
+                             style = MaterialTheme.typography.bodySmall,
+                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
                 // 标签。⚠️ 列表行里限量显示（多的收成「+N」）—— 这一行要跟金额、备注抢宽度

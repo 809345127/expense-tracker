@@ -34,6 +34,9 @@ class Settings(private val context: Context) {
         it[Keys.token] ?: BuildConfig.DEFAULT_SYNC_TOKEN
     }
     val lastSyncAt: Flow<Long> = context.store.data.map { it[Keys.lastSyncAt] ?: 0L }
+    /// 同步游标（服务器给的 rev，客户端记住见过的最大值）。排障时最有用的一个数：
+    /// 它卡住不动就说明拉取那一半没在推进
+    val lastRevFlow: Flow<Long> = context.store.data.map { it[Keys.lastRev] ?: 0L }
     val lastError: Flow<String> = context.store.data.map { it[Keys.lastError] ?: "" }
 
     suspend fun urlNow(): String = url.first()
