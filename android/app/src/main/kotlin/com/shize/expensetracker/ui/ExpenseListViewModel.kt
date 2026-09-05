@@ -9,6 +9,9 @@ import com.shize.expensetracker.data.ExpenseFilter
 import com.shize.expensetracker.data.TagEntity
 import com.shize.expensetracker.data.matching
 import com.shize.expensetracker.data.tagIndex
+import com.shize.expensetracker.sync.SyncRunner
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import androidx.lifecycle.viewModelScope
@@ -63,9 +66,37 @@ class ExpenseListViewModel(app: Application) : AndroidViewModel(app) {
         combine(monthExpenses, filter, tagsByExpense) { list, f, idx -> list.matching(f, idx) }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    private val _refreshing = MutableStateFlow(false)
+    /// 下拉刷新的转圈状态
+    val refreshing: StateFlow<Boolean> = _refreshing
+
+    /// 用户下拉刷新。
+    ///
+    /// ⚠️ **直接 await SyncRunner，不走 SyncWorker** —— WorkManager 是「排进队列就返回」，
+    /// 走它的话转圈会立刻停掉，看着像「下拉了但什么都没发生」。
+    ///
+    /// ⚠️ `recordProblems = true`：这是用户主动触发的，失败了就该在同步设置页留下痕迹。
+    ///
+    /// ⚠️ 至少转 600 毫秒再收：同步在没新数据时可能几十毫秒就回来了，
+    /// 转圈一闪而过等于没有反馈，用户会以为下拉没生效、然后再拉几次。
+    fun refresh() = viewModelScope.launch {
+        _refreshing.value = true
+        val startedAt = System.currentTimeMillis()
+        try {
+            SyncRunner.run(getApplication(), recordProblems = true)
+        } finally {
+            val spent = System.currentTimeMillis() - startedAt
+            if (spent < MIN_SPINNER_MS) delay(MIN_SPINNER_MS - spent)
+            _refreshing.value = false
+        }
+    }
+
     fun prevMonth() { appState.month.value = appState.month.value.minusMonths(1) }
     fun nextMonth() { appState.month.value = appState.month.value.plusMonths(1) }
     fun setFilter(f: ExpenseFilter) { appState.filter.value = f }
 
     suspend fun delete(e: ExpenseEntity) = repo.deleteExpense(e)
 }
+
+/// 下拉刷新转圈的最短时长。低于这个数的话转圈一闪而过，看着像没刷。
+private const val MIN_SPINNER_MS = 600L

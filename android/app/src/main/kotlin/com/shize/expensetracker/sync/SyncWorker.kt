@@ -2,9 +2,7 @@ package com.shize.expensetracker.sync
 
 import android.content.Context
 import androidx.work.*
-import com.shize.expensetracker.data.AppDatabase
 import com.shize.expensetracker.data.Settings
-import com.shize.expensetracker.widget.WidgetRefresh
 import java.util.concurrent.TimeUnit
 
 /// 后台同步。用 WorkManager —— 这是安卓做这件事的标准答案：
@@ -13,25 +11,17 @@ import java.util.concurrent.TimeUnit
 class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
-        val settings = Settings(applicationContext)
-        val api = Network.api(settings) ?: return Result.success()  // 还没配服务器，不算失败
-        return try {
-            val report = SyncEngine(api, AppDatabase.get(applicationContext), settings).syncOnce()
-            if (report.stale.isEmpty()) settings.recordSuccess()
-            // ⚠️ 有 stale 就**不算干净成功**：那几条改动已经永久没了，
-            // 必须在同步设置页里留下痕迹，否则两台手机数据不一样而界面上一切正常
-            else settings.recordFailure(staleMessage(report.stale.size))
-            // ⚠️ 拉到新数据也要刷桌面小组件：另一台手机上记的账，本机界面靠 Room 的 Flow
-            // 自动更新，但小组件不在 Compose 里、不会自己动 —— 不刷的话桌面上那个数会
-            // 一直是上次的值，而它跟 app 里对不上本身就是个隐私漏洞（能看出差了几笔）
-            if (report.pulled > 0) WidgetRefresh.request(applicationContext)
+        // 真正的逻辑在 SyncRunner 里（前台轮询和下拉刷新也走它，见那边的注释）。
+        // ⚠️ 这里传 recordProblems = true：后台任务失败了必须留痕给界面看，
+        // 静默失败是最坏的形态 —— 两台手机数据不一样，而界面上一切正常。
+        val report = SyncRunner.run(applicationContext, recordProblems = true)
+        return if (report != null) {
             Result.success(workDataOf("pulled" to report.pulled, "pushed" to report.pushed))
-        } catch (e: Exception) {
-            // ⚠️ 失败要留痕给界面看。静默失败是最坏的形态：
-            // 两台手机数据不一样，而界面上一切正常
-            settings.recordFailure(e.message ?: e.javaClass.simpleName)
+        } else {
             // ⚠️ retry 而不是 failure：网络类问题让 WorkManager 按指数退避自己重试，
-            // 判成 failure 就再也不试了
+            // 判成 failure 就再也不试了。
+            // ⚠️ 注意 report 为 null 也可能是「压根没配服务器」—— 那种情况重试也无害
+            //（下次还是立刻返回 null），比为了区分两者把返回值搞复杂划算
             if (runAttemptCount < 5) Result.retry() else Result.failure()
         }
     }
@@ -64,7 +54,9 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             )
         }
 
-        /// 立刻同步一次（记完一笔、或者用户下拉刷新时调）
+        /// 立刻同步一次（记完一笔时调）。
+        /// ⚠️ 下拉刷新**不走这里**，它直接 await SyncRunner —— 因为下拉要等出结果好收起转圈，
+        /// 而 WorkManager 是"排进队列就返回"，转圈会立刻停掉、看着像没刷
         fun syncNow(context: Context) {
             val req = OneTimeWorkRequestBuilder<SyncWorker>()
                 .setConstraints(

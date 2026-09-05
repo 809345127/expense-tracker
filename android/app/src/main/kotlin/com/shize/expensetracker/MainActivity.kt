@@ -19,12 +19,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.shize.expensetracker.data.ExpenseEntity
 import com.shize.expensetracker.data.ExpenseFilter
+import com.shize.expensetracker.sync.SyncRunner
 import com.shize.expensetracker.sync.SyncWorker
 import com.shize.expensetracker.ui.*
 import com.shize.expensetracker.ui.theme.AppTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /// 单 Activity + 全 Compose，没有一行 XML 布局（安卓官方推荐的写法）。
@@ -74,6 +78,7 @@ class MainActivity : FragmentActivity() {
 
         val app = App.from(this)
         val gate = app.gate
+        startForegroundPolling()
 
         setContent {
             AppTheme {
@@ -195,6 +200,42 @@ class MainActivity : FragmentActivity() {
         // ⚠️ 这条比周期任务靠得住：vivo（OriginOS）这类 ROM 杀后台很凶，
         // WorkManager 那个 15 分钟的周期任务很可能不会按时跑。
         SyncWorker.syncNow(this)
+    }
+
+    /// 前台轮询：app 在前台时每 30 秒静默拉一次。
+    ///
+    /// ## 为什么需要它（2026-09-05 用户报的）
+    ///
+    /// 「在 vivo 上记了一笔，iPhone 那边没立即出现，要手动点同步才出现。」
+    /// 根因不是同步坏了 —— 记那一半是通的（1 秒内就推到服务器）。缺的是**反方向**：
+    /// **没有任何人告诉另一台「有新数据了」**。
+    /// 而这台只在两个时刻去问服务器：切回前台的那一下、以及手动点同步。
+    /// ⚠️ 所以 **app 一直开着没切出去过时，第一条压根不触发** —— 那正是用户遇到的情况。
+    ///
+    /// 行业里的正经答案是**静默推送**（服务器变了就推一条，app 在后台也能收到），
+    /// 但那条路 iOS 侧要付费开发者账号（$99/年），而且就算做了，
+    /// iOS 的静默推送是尽力而为、系统会按电量限流，不保证秒到。
+    /// 这个轮询是**零成本**的那一档：只覆盖「app 在前台」，而那恰好是
+    /// 「两台手机都在手边、刚记完想看看另一台」这个真实场景。
+    ///
+    /// ## 为什么挂在 RESUMED 上
+    ///
+    /// `repeatOnLifecycle(RESUMED)` 会在 app 离开前台时**自动取消**这个循环、
+    /// 回来时重新起 —— 不用自己管启停，也不会在后台偷偷耗电。
+    /// ⚠️ 用 RESUMED 不是 STARTED：STARTED 在「被别的界面盖住但还可见」时也成立
+    ///（比如系统的指纹弹窗盖在上面），那时候轮询没意义。
+    private fun startForegroundPolling() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                while (true) {
+                    delay(SyncRunner.FOREGROUND_POLL_MS)
+                    // ⚠️ recordProblems = false：轮询 30 秒一次，没网时会一直失败，
+                    // 写进 lastError 会把「上次的问题」刷成噪音 —— 那一行是留给
+                    // 「我主动点了同步，结果出了什么事」的。见 SyncRunner 的注释。
+                    SyncRunner.run(this@MainActivity, recordProblems = false)
+                }
+            }
+        }
     }
 
     override fun onStop() {

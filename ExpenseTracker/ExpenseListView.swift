@@ -233,6 +233,19 @@ private struct ExpenseList: View {
             }
         }
         #endif
+        // 下拉刷新（2026-09-05 加的）。
+        //
+        // ⚠️ 在这之前，想强制拉一次只能进「同步设置」点按钮 —— 那不是这个手势该待的地方。
+        // 用户的原话是「在 vivo 上记了一笔，iPhone 这边没立即出现，要手动点同步才出现」。
+        // 根因不是同步坏了：记那一半是通的，缺的是**反方向** —— 没人告诉这台「有新数据了」。
+        // 而这台只在「切回前台的那一下」和「手动点」时才去问服务器，
+        // ⚠️ **app 一直开着没切出去过时，前者压根不触发**。
+        //
+        // 现在：下拉即时 + 在前台时每 30 秒静默拉一次（见 ExpenseTrackerApp 那个轮询）。
+        // ⚠️ `syncNow` 自带 inFlight 互斥，跟轮询、跟「记完一笔立刻推」撞上都不会打架。
+        .refreshable {
+            await SyncEngine.shared.syncNow(context.container)
+        }
         .sheet(item: $editing) { expense in
             ExpenseFormView(expense: expense)
         }

@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,6 +60,7 @@ fun ExpenseListScreen(
     val allTags by vm.tags.collectAsStateWithLifecycle()
     val activeTags by vm.activeTags.collectAsStateWithLifecycle()
     val tagsByExpense by vm.tagsByExpense.collectAsStateWithLifecycle()
+    val refreshing by vm.refreshing.collectAsStateWithLifecycle()
 
     val catByKey = remember(categories) { categories.associateBy { it.id } }
     val tagById = remember(allTags) { allTags.associateBy { it.id } }
@@ -128,9 +130,20 @@ fun ExpenseListScreen(
             )
         },
     ) { padding ->
+        // 下拉刷新（2026-09-05 加的）。
+        //
+        // ⚠️ 在这之前，想强制拉一次只能进「同步设置」点按钮 —— 那不是这个手势该待的地方。
+        // 而用户的真实痛点是「在另一台记完，想立刻在这台看到」：现在下拉一下即时，
+        // 加上 app 在前台时每 30 秒的静默轮询（见 MainActivity.startForegroundPolling），
+        // 这个场景就不用去翻设置页了。
+        PullToRefreshBox(
+            isRefreshing = refreshing,
+            onRefresh = vm::refresh,
+            modifier = Modifier.padding(padding).fillMaxSize(),
+        ) {
         LazyColumn(
             state = listState,
-            modifier = Modifier.padding(padding).fillMaxSize(),
+            modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(GROUP_GAP),
         ) {
@@ -188,6 +201,7 @@ fun ExpenseListScreen(
 
             // 别让最后一行被 FAB 压住
             item(key = "tail") { Spacer(Modifier.height(88.dp)) }
+        }
         }
     }
 

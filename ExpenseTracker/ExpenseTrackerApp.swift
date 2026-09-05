@@ -55,6 +55,34 @@ struct ExpenseTrackerApp: App {
                     Color(.systemBackground).ignoresSafeArea()
                 }
             }
+            // 前台轮询：app 在前台时每 30 秒静默拉一次（2026-09-05 加的）。
+            //
+            // ## 为什么需要它
+            //
+            // 用户报的：「在 vivo 上记了一笔，iPhone 那边没立即出现，要手动点同步才出现。」
+            // 根因不是同步坏了 —— 记那一半是通的。缺的是**反方向**：
+            // **没有任何人告诉这台「有新数据了」**。而它只在两个时刻去问服务器：
+            // 切回前台的那一下、以及手动点同步。
+            // ⚠️ 所以 **app 一直开着没切出去过时，第一条压根不触发** —— 那正是用户遇到的情况。
+            //
+            // 行业里的正经答案是**静默推送**（服务器变了就推一条，app 在后台也能收到），
+            // 但那条路要**付费开发者账号**（$99/年，免费账号签不出带推送能力的描述文件）；
+            // 而且就算做了，iOS 的静默推送是尽力而为、系统按电量和使用习惯限流，不保证秒到。
+            // 这个轮询是**零成本**的那一档：只覆盖「app 在前台」，而那恰好是
+            // 「两台手机都在手边、刚记完想看看另一台」这个真实场景。
+            //
+            // ⚠️ 用 `.task(id:)` 而不是自己起 Timer：id 变化时 SwiftUI 会**自动取消**旧任务。
+            // app 一离开 .active（切后台、拉控制中心、来电话）这个循环就停了，不会在后台偷偷跑。
+            // ⚠️ 先 sleep 再同步，不是先同步 —— 刚进前台那一下已经有
+            // `onChange(of: scenePhase, initial: true)` 同步过了，这里立刻再来一次是白跑。
+            .task(id: scenePhase == .active) {
+                guard scenePhase == .active, SyncConfig.isConfigured else { return }
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(30))
+                    if Task.isCancelled { break }
+                    await SyncEngine.shared.syncNow(container)
+                }
+            }
             .tint(.blue) // 系统蓝：浅色 #007AFF / 深色 #0A84FF 自动切换
             .environment(\.locale, Locale(identifier: "zh_CN"))
             .environment(gate)
