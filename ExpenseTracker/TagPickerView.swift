@@ -10,6 +10,9 @@ struct TagPickerView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
+    /// ⚠️ 下面那两处「这个标签用在几笔」必须过它，见 visibleUses 的注释。
+    /// sheet 会继承呈现方的 environment（`FilterSheet` 同样这么拿的），所以这里读得到。
+    @Environment(PrivacyGate.self) private var gate
 
     // 故意不在 @Query 里写 #Predicate 过滤 isArchived：
     // SwiftData 对布尔取反这类谓词的支持不稳，编译能过但运行时可能直接抛「不支持的谓词」
@@ -91,7 +94,7 @@ struct TagPickerView: View {
             } message: {
                 // ⚠️ `tag.expenses` 是 SwiftData 的关系、不是 @Query，所以不经过 visible()，
                 // 必须自己过 `.alive` —— 不然删掉的账会被数进"这个标签用在几笔上"
-                Text("这个标签用在 \(pendingDelete?.expenses.alive.count ?? 0) 笔记录上。删掉后那些记录会失去这个标签，金额和其它内容不受影响。")
+                Text("这个标签用在 \(pendingDelete.map(visibleUses(of:)) ?? 0) 笔记录上。删掉后那些记录会失去这个标签，金额和其它内容不受影响。")
             }
             .alert(alertMessage ?? "", isPresented: Binding(
                 get: { alertMessage != nil },
@@ -115,7 +118,7 @@ struct TagPickerView: View {
                     .foregroundStyle(.primary)
                 Spacer()
                 // 这个标签一共用在多少笔记录上，顺手给个手感
-                Text("\(tag.expenses.alive.count)")   // ⚠️ 同上，关系要自己过墓碑
+                Text("\(visibleUses(of: tag))")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .monospacedDigit()
@@ -151,6 +154,25 @@ struct TagPickerView: View {
     }
 
     // MARK: - 数据
+
+    /// 这个标签用在多少笔**看得见的**记录上。
+    ///
+    /// ⚠️⚠️ **必须过私密门**（2026-09-05 补的，之前这里写的是 `tag.expenses.alive.count`，
+    /// 只摘墓碑、不管私密）。不过的话，锁着的时候这里显示「咖啡 15」，而按这个标签
+    /// 筛出来只有 12 笔 —— **那个对不上的数就是最容易露馅的地方**，别人一比就知道
+    /// 藏了东西、还知道藏了几笔。这是本项目的第一条红线（见 PrivacyGate.swift 顶部）。
+    /// 安卓端同一处（`TagsViewModel.usage`）也是这么算的，两端一致。
+    ///
+    /// ⚠️ `tag.expenses` 是 SwiftData 的**关系**、不是 `@Query`，所以不经过任何全局过滤，
+    /// 墓碑和私密都得自己滤 —— `visible(unlocked:)` 两件事一起做了。
+    ///
+    /// 📌 删除确认框里也用这个数。锁着时它会少报（某个标签只挂在私密记录上时会显示 0），
+    /// 这是**刻意接受的**：删标签只是让那些账目少一个标签，金额和其它字段一个都不动，
+    /// 少报不会造成不可挽回的后果。分类那边不一样（分类是必填的，删错会让账目悬空），
+    /// 所以那边「能不能删」按全部记录判、只有显示的数才过门。
+    private func visibleUses(of tag: Tag) -> Int {
+        tag.expenses.visible(unlocked: gate.isUnlocked).count
+    }
 
     private var visibleTags: [Tag] {
         let key = Tag.comparisonKey(search)
