@@ -34,8 +34,12 @@ import kotlinx.coroutines.launch
 // 所以从用户角度看就是「安卓上没有标签这个东西」，虽然数据一直在同步。
 //
 // 分工（刻意跟已有的分类那套对称）：
-//   · `TagPickerSheet`   —— 只管**选**和**新建**，从「记一笔」进来，底部弹层
+//   · `TagPickerInline`  —— 只管**选**和**新建**，直接长在「记一笔」表单里
 //   · `TagManagerScreen` —— 管**改名 / 删除**，从「更多 → 标签管理」进来，整页
+//
+// ⚠️ 2026-09-08 之前选择器是一个**底部弹层**（`TagPickerSheet`，已删）。
+// 换掉的理由见 `ExpenseFormScreen` 里「标签」那一段的注释 —— 简单说是：
+// 分类在表单里直接铺着、标签却藏在弹层后面，同一页上两件同性质的事一个铺开一个藏起来。
 //
 // ⚠️ 为什么不把改名/删除也塞进选择器（iOS 那边是塞在一起的，靠左滑）：
 // 左滑改名/删除在安卓上没有对应物，硬做手感是别人家的；而给每个 chip 加长按菜单会跟
@@ -65,9 +69,10 @@ fun TagChip(name: String, colorIndex: Int, compact: Boolean = true) {
 
 /// 一行标签，超出 `limit` 个收成「+N」。
 ///
-/// ⚠️ `limit = null` 表示全显示。**表单里必须用 null**：那一行是「我给这笔挂了哪些标签」
-/// 的答案，收成「+N」会被读成「只能挂 N 个」（iOS 那边用户 2026-08-18 真这么问过）。
-/// 列表行仍然限量 —— 那里要跟金额、备注抢宽度。
+/// ⚠️ `limit = null` 表示全显示。**凡是「我给这笔挂了哪些标签」的答案都要用 null**：
+/// 收成「+N」会被读成「只能挂 N 个」（iOS 那边用户 2026-08-18 真这么问过）。
+/// 只有明细列表行是限量的 —— 那一行要跟金额抢宽度，而且它是概览、不是答案。
+/// （安卓表单现在不走这个组件了，改成可点的 `FilterChip`，见 `TagPickerInline`。）
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TagChipRow(tags: List<TagEntity>, limit: Int? = 2, compact: Boolean = true) {
@@ -98,8 +103,14 @@ class TagsViewModel(app: Application) : AndroidViewModel(app) {
     private val appState = App.from(app)
     private val repo = appState.repository
 
+    /// 可选的标签（去掉墓碑，也去掉停用的）
     val tags: StateFlow<List<TagEntity>> =
         repo.observeTags().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /// 含停用的。⚠️ 只给 `TagPickerInline` 用来把「已经挂在这笔账上的停用标签」补回列表里，
+    /// 别拿它当可选列表 —— 那样停用就等于没停用
+    val allTags: StateFlow<List<TagEntity>> =
+        repo.observeAllTags().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /// 每个标签用在多少笔账上。
     ///
@@ -136,85 +147,59 @@ class TagsViewModel(app: Application) : AndroidViewModel(app) {
 
 // ---------------------------------------------------------------- 选择器（选 + 新建）
 
-/// 给一笔账挑标签。底部弹层 —— 安卓做「临时选一下就回去」的标准答案：拇指够得着、下滑就关。
+/// 记一笔页面里**直接平铺**的标签选择器。一次点击就选上／取消，没有弹层、没有确认按钮。
 ///
-/// ⚠️ 这里**不做**改名和删除（见文件头）。要改要删走「更多 → 标签管理」。
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+/// 跟 2026-09-08 之前那个底部弹层版比，少了两样东西，都是因为它长在表单里、不是临时浮层：
+///   ① **那句「一笔可以打多个标签」的说明**——chip 能多选这件事点一下就知道了，
+///      而表单里每一行说明都在跟真正要填的东西抢位置；
+///   ② **「用在 N 笔」那个数字**——记账当下不关心这个标签历史上用过几次，
+///      那个数只在「标签管理」那种盘点场景有用；挤在名字旁边还容易被读成金额。
+///      （盘点场景仍然有：`TagManagerScreen` 用的就是 `vm.usage`。）
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun TagPickerSheet(
+fun TagPickerInline(
     selected: Set<String>,
     onSelectedChange: (Set<String>) -> Unit,
-    onDismiss: () -> Unit,
     vm: TagsViewModel = viewModel(),
 ) {
-    val tags by vm.tags.collectAsStateWithLifecycle()
-    val usage by vm.usage.collectAsStateWithLifecycle()
+    val active by vm.tags.collectAsStateWithLifecycle()
+    val all by vm.allTags.collectAsStateWithLifecycle()
     var creating by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            Modifier
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp)
-                .padding(bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text("标签", style = MaterialTheme.typography.headlineSmall)
-            Text(
-                if (tags.isEmpty())
-                    "标签是横着切的另一刀：分类回答「钱花在什么事上」，标签回答「属于哪一档」"
-                        + "—— 比如早饭 / 午饭 / 晚饭、出差、可报销。一笔可以打多个。"
-                else "一笔可以打多个标签。",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+    // ⚠️ 停用（`isArchived`）的标签**平时不列出来，但已经挂在这笔账上的必须列出来**，
+    // 否则那个选中状态在界面上根本看不见 —— 用户既不知道这笔挂着它、也没法取消。
+    // （旧的弹层版是把已选标签在表单里另外只读显示一遍，才没暴露这个问题。）
+    // 目前两端都还没有「停用标签」的入口，所以这一段现在跑不到；留着是为了以后加入口时不用回来补。
+    val tags = remember(active, all, selected) {
+        val extra = all.filter { it.isArchived && it.id in selected }
+        if (extra.isEmpty()) active else active + extra
+    }
 
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                tags.forEach { tag ->
-                    val isOn = tag.id in selected
-                    FilterChip(
-                        selected = isOn,
-                        onClick = {
-                            onSelectedChange(if (isOn) selected - tag.id else selected + tag.id)
-                        },
-                        label = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(tag.name)
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    "${usage[tag.id] ?: 0}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    // ⚠️ 用 onSurfaceVariant，别更淡：这个项目量过对比度 ——
-                                    // 三级灰对白底只有 1.84:1，小字可读下限 4.5:1。
-                                    // 层级靠字号拉开，不靠涂淡。
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        },
-                        leadingIcon = {
-                            if (isOn) Icon(Icons.Filled.Check, null, Modifier.size(18.dp))
-                            else Box(
-                                Modifier.size(10.dp).clip(CircleShape)
-                                    .background(tagColor(tag.colorIndex))
-                            )
-                        },
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        tags.forEach { tag ->
+            val isOn = tag.id in selected
+            FilterChip(
+                selected = isOn,
+                onClick = { onSelectedChange(if (isOn) selected - tag.id else selected + tag.id) },
+                label = { Text(tag.name) },
+                leadingIcon = {
+                    if (isOn) Icon(Icons.Filled.Check, null, Modifier.size(18.dp))
+                    else Box(
+                        Modifier.size(10.dp).clip(CircleShape)
+                            .background(tagColor(tag.colorIndex))
                     )
-                }
-                AssistChip(
-                    onClick = { creating = true },
-                    label = { Text("新建") },
-                    leadingIcon = { Icon(Icons.Filled.Add, null, Modifier.size(18.dp)) },
-                )
-            }
-
-            if (selected.isNotEmpty()) {
-                TextButton(onClick = { onSelectedChange(emptySet()) }) { Text("全部取消") }
-            }
+                },
+            )
         }
+        AssistChip(
+            onClick = { creating = true },
+            label = { Text("新建") },
+            leadingIcon = { Icon(Icons.Filled.Add, null, Modifier.size(18.dp)) },
+        )
     }
 
     if (creating) {

@@ -379,7 +379,11 @@ private fun EmptyState(filtering: Boolean, onClearFilter: () -> Unit) {
     }
 }
 
-/// 一行两行制：第一行「这是什么」，第二行「什么时候」，标签跟在后面。
+/// **严格两行制**：第一行「这是什么」（标题 + 标签），第二行「什么时候」。
+///
+/// ⚠️⚠️ **两行这件事是硬约束，别再往下加第三行。** 标签原来单独占一行，结果是
+/// 有标签的行比没标签的行高一截 —— 同一组里行高忽高忽低，左边那颗分类图标也跟着上下浮动，
+/// 一屏还少放一行。要加新信息就往这两行里挤，或者干脆不显示。
 ///
 /// ⚠️ 创建时间**只在真是补记时才显示**（跟 iOS 一致）—— 当场记的账两个时间只差几十秒，
 /// 每行都印出来纯粹是噪音。
@@ -430,8 +434,23 @@ private fun ExpenseRow(
                         Icon(Icons.Filled.Lock, "私密", Modifier.size(13.dp),
                              tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
+                    // 标签跟在标题后面。⚠️ 别把它挪回单独一行 —— 那样**有标签的行会比
+                    // 没标签的行高一截**，同一组里行高忽高忽低，左边那颗分类图标也跟着上下浮动。
+                    // （2026-09-08 把三个版本摆在一起比过：独占一行是最不整齐的那个。）
+                    //
+                    // 📌 这一版**跟 iOS 逐处一致**：`ExpenseListView.swift` 的 `ExpenseRow`
+                    // 一直是「第一行 标题 + TagChipRow(limit: 2)，第二行 时间」。
+                    // 安卓当初把标签抄成了第三行，是漏对齐、不是平台差异
+                    // —— 9/05 那轮 parity 核查比的是**中文串差集**，装不下「排版位置」这种差异。
+                    // ⚠️ 唯一还剩的小差别：私密锁头 iOS 在标题**前**、安卓在标题**后**。
+                    //
+                    // ⚠️ 这里限量 2 个（跟 iOS 同一个数）：这一行要跟金额抢宽度，多的收成「+N」。
+                    if (tags.isNotEmpty()) {
+                        Spacer(Modifier.width(8.dp))
+                        TagChipRow(tags, limit = 2)
+                    }
                 }
-                Row {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     if (e.note.isNotEmpty()) {
                         Text("${cat?.name ?: e.categoryKey} · ",
                              style = MaterialTheme.typography.bodySmall,
@@ -449,11 +468,6 @@ private fun ExpenseRow(
                              color = MaterialTheme.colorScheme.onSurfaceVariant,
                              maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                }
-                // 标签。⚠️ 列表行里限量显示（多的收成「+N」）—— 这一行要跟金额、备注抢宽度
-                if (tags.isNotEmpty()) {
-                    Spacer(Modifier.height(2.dp))
-                    TagChipRow(tags, limit = 3)
                 }
             }
             Spacer(Modifier.width(8.dp))

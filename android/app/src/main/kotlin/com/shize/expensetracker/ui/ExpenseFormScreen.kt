@@ -16,7 +16,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material.icons.filled.Sell
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -40,7 +39,6 @@ import com.shize.expensetracker.App
 import com.shize.expensetracker.hasDeviceLock
 import com.shize.expensetracker.data.CategoryEntity
 import com.shize.expensetracker.data.ExpenseEntity
-import com.shize.expensetracker.data.TagEntity
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -55,10 +53,6 @@ class ExpenseFormViewModel(app: Application) : AndroidViewModel(app) {
 
     val categories: StateFlow<List<CategoryEntity>> =
         repo.observeCategories().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
-
-    /// ⚠️ 含已归档的：历史账目上挂着的归档标签，编辑时要能显示出名字
-    val tags: StateFlow<List<TagEntity>> =
-        repo.observeAllTags().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /// 编辑一笔已有的账时，把它现在挂着的标签读出来当初值。
     /// ⚠️ 用 `.first()` 现查一次，不订阅 Flow：这是**命令式**路径（进页面时取一次初值），
@@ -112,7 +106,6 @@ fun ExpenseFormScreen(
     vm: ExpenseFormViewModel = viewModel(),
 ) {
     val categories by vm.categories.collectAsStateWithLifecycle()
-    val allTags by vm.tags.collectAsStateWithLifecycle()
     val unlocked by vm.unlocked.collectAsStateWithLifecycle()
 
     var amountText by remember {
@@ -133,7 +126,6 @@ fun ExpenseFormScreen(
     var date by remember { mutableLongStateOf(editing?.date ?: System.currentTimeMillis()) }
     var tagIds by remember { mutableStateOf(emptySet<String>()) }
     var confirmDelete by remember { mutableStateOf(false) }
-    var showTags by remember { mutableStateOf(false) }
     var showDate by remember { mutableStateOf(false) }
     var showTime by remember { mutableStateOf(false) }
 
@@ -152,7 +144,6 @@ fun ExpenseFormScreen(
     }
     val canSave = parseAmount(amountText) != null && effectiveKey.isNotEmpty()
     val isPrivate = privateChoice ?: unlocked
-    val selectedTags = remember(allTags, tagIds) { allTags.filter { it.id in tagIds } }
 
     Scaffold(
         topBar = {
@@ -238,6 +229,18 @@ fun ExpenseFormScreen(
                 }
             }
 
+            // ---- 标签 ----
+            //
+            // ⚠️⚠️ **直接铺在这儿，不要退回「一条灰条 + 底部弹层」那种写法**（2026-09-08 改的）。
+            // 原来那版要「点灰条 → 弹层里选 → 下滑关掉」三步，而且弹层盖着表单，
+            // 选完必须先关掉才看得见自己选了哪几个。**而分类就在上面直接铺着** ——
+            // 同一个页面上两件同性质的事一个铺开一个藏起来，这个不对称本身就是别扭的来源。
+            //
+            // 位置紧跟分类：分类和标签回答的是同一类问题（这笔是什么），
+            // 时间和备注是次要的，排在后面。
+            SectionTitle("标签")
+            TagPickerInline(selected = tagIds, onSelectedChange = { tagIds = it })
+
             // ---- 时间 ----
             SectionTitle("时间")
             Column(verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
@@ -249,33 +252,6 @@ fun ExpenseFormScreen(
                     icon = Icons.Filled.Schedule, label = "时刻", value = date.timeText(),
                     shape = groupedShape(1, 2), onClick = { showTime = true },
                 )
-            }
-
-            // ---- 标签 ----
-            SectionTitle("标签")
-            Surface(
-                onClick = { showTags = true },
-                shape = MaterialTheme.shapes.large,
-                color = MaterialTheme.colorScheme.surfaceContainer,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Row(
-                    Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Filled.Sell, null, Modifier.size(20.dp),
-                         tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.width(12.dp))
-                    if (selectedTags.isEmpty()) {
-                        Text("点这里给它打标签（可选）",
-                             style = MaterialTheme.typography.bodyMedium,
-                             color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } else {
-                        // ⚠️ 这里**必须全显示**（limit = null）：这一行是「我给这笔挂了哪些标签」
-                        // 的答案，收成「+N」会被读成「只能挂 N 个」（iOS 那边用户真这么问过）
-                        TagChipRow(selectedTags, limit = null, compact = false)
-                    }
-                }
             }
 
             // ---- 备注 ----
@@ -335,14 +311,6 @@ fun ExpenseFormScreen(
         Surface(Modifier.fillMaxSize()) {
             CategoryManagerScreen(onBack = { showCategories = false })
         }
-    }
-
-    if (showTags) {
-        TagPickerSheet(
-            selected = tagIds,
-            onSelectedChange = { tagIds = it },
-            onDismiss = { showTags = false },
-        )
     }
 
     if (showDate) {
