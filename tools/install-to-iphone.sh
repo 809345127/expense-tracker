@@ -171,13 +171,28 @@ xcrun devicectl device install app --device "$UDID" "$APP" || {
 }
 
 echo "▸ 6/6 启动"
-# 手机锁屏时启动会被系统拒（报 Locked），等一会儿重试几次；启动本身不影响装机结果，
-# 但只有真跑起来 SwiftData 才会做数据库升级，所以值得等
+# 启动本身不影响装机结果，但只有真跑起来 SwiftData 才会做数据库升级，所以值得等。
+#
+# ⚠️⚠️ 启动被拒（RequestDenied）有**两个完全不同的原因，处置相反**，而它们的外层错误码一样，
+# 所以必须读错误正文来分流 —— 别再统一报「手机像是锁着」：
+#   ① 手机锁屏          → 解锁就行，等几秒重试能自己好
+#   ② 描述文件没被信任  → 重试一万次都不会好，必须用户去手机设置里点「信任」
+# 2026-09-11 实测踩到过：签名真过期了 3 小时之后补装，iOS 会把这张开发者证书的信任状态清掉，
+# 此时手机是解锁的、描述文件也已经是 Valid，但这里连报 6 次「手机像是锁着」，
+# 把排查方向整个带偏（去查锁屏状态，而那一项是正常的）。
 LAUNCHED=no
+LAUNCH_ERR=""
 for _ in 1 2 3 4 5 6; do
-    if xcrun devicectl device process launch --device "$UDID" com.shize.ExpenseTracker >/dev/null 2>&1; then
+    if LAUNCH_ERR=$(xcrun devicectl device process launch --device "$UDID" com.shize.ExpenseTracker 2>&1); then
         LAUNCHED=yes
         echo "  ✓ 已在手机上启动"
+        break
+    fi
+    # 判据是错误正文里的这两个串（devicectl 原话），不是退出码 —— 两种情况退出码相同
+    if printf '%s' "$LAUNCH_ERR" | grep -qiE "explicitly trusted|invalid code signature"; then
+        echo "  ✗ 描述文件还没被信任，重试没用。请在手机上点一次信任："
+        echo "      设置 → 通用 → VPN 与设备管理 → 开发者 App → 信任（手机要联网）"
+        echo "    信任完之后重跑本脚本，或者直接在桌面点「记账本」图标。"
         break
     fi
     echo "  手机像是锁着（启动被拒），解锁一下…… 5 秒后重试"
