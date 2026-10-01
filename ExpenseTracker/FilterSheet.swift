@@ -43,26 +43,36 @@ struct FilterSheet: View {
 
     private let columns = [GridItem(.adaptive(minimum: 104), spacing: 8)]
 
+    private func categorySection(_ cats: [CategoryDef], title: String, footer: String?) -> some View {
+        Section {
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+                ForEach(cats) { cat in
+                    CategoryChip(
+                        category: cat,
+                        count: counts.category[cat.key] ?? 0,
+                        selected: draft.categoryKeys.contains(cat.key)
+                    ) {
+                        draft.toggle(categoryKey: cat.key)
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+        } header: {
+            Text(title)
+        } footer: {
+            if let footer { Text(footer) }
+        }
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
-                        ForEach(allCategories) { cat in
-                            CategoryChip(
-                                category: cat,
-                                count: counts.category[cat.key] ?? 0,
-                                selected: draft.categoryKeys.contains(cat.key)
-                            ) {
-                                draft.toggle(categoryKey: cat.key)
-                            }
-                        }
-                    }
-                    .padding(.vertical, 4)
-                } header: {
-                    Text("分类")
-                } footer: {
-                    Text("选多个 = 这几类都要看")
+                categorySection(allCategories.filter { !$0.isIncome },
+                                title: "分类", footer: "选多个 = 这几类都要看")
+                // 收入分类单独一组；一个都没有（或全删了）就不出现
+                let incomeCats = allCategories.filter { $0.isIncome }
+                if !incomeCats.isEmpty {
+                    categorySection(incomeCats, title: "收入分类", footer: nil)
                 }
 
                 TagFilterSection(selection: $draft.tagIDs, counts: counts.tag)

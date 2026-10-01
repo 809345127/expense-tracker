@@ -1,5 +1,6 @@
 package com.shize.expensetracker.ui
 
+import com.shize.expensetracker.data.ExpenseEntity
 import java.math.BigDecimal
 import java.text.DecimalFormat
 
@@ -61,3 +62,28 @@ fun formatYuan(v: BigDecimal, roundWhenLarge: Boolean = false): String =
     if (roundWhenLarge && v >= BigDecimal(1000)) yuanRound.format(v) else yuanFull.format(v)
 
 fun List<BigDecimal>.sum(): BigDecimal = fold(BigDecimal.ZERO) { a, b -> a + b }
+
+/// 支出合计：只加正数那些。⚠️ 别写回 `map { it.amount }.sum()` —— 收入会把支出抵掉
+fun List<ExpenseEntity>.expenseSum(): BigDecimal =
+    fold(BigDecimal.ZERO) { a, e -> if (e.isIncome) a else a + e.amount }
+
+/// 收入合计（正数）：只加负数那些、取绝对值
+fun List<ExpenseEntity>.incomeSum(): BigDecimal =
+    fold(BigDecimal.ZERO) { a, e -> if (e.isIncome) a + e.magnitude else a }
+
+/// 可能为负的金额（结余）：负数显示成 -¥12.30，跟 iOS 的货币格式一样把负号放在 ¥ 前面。
+/// ⚠️ 不能直接 formatYuan(负数)：DecimalFormat 会给出「-¥12.30」还是「¥-12.30」取决于模式串
+fun formatSigned(v: BigDecimal): String =
+    if (v.signum() < 0) "-" + formatYuan(v.abs()) else formatYuan(v)
+
+/// 收入的展示：+¥5,000.00。⚠️ 传进来的必须是**正数**（magnitude / incomeSum）
+fun formatIncome(v: BigDecimal): String = "+" + formatYuan(v)
+
+/// 收入金额的绿色。⚠️ 不用纯绿 #00C853 之类：白底上对比度太低、金额读不清。
+/// 浅色用深一档的绿，深色用亮一点的（跟 iOS `Color.income` 同一对色值）
+val IncomeGreenLight = androidx.compose.ui.graphics.Color(0xFF1C853D)
+val IncomeGreenDark = androidx.compose.ui.graphics.Color(0xFF30D158)
+
+@androidx.compose.runtime.Composable
+fun incomeColor(): androidx.compose.ui.graphics.Color =
+    if (androidx.compose.foundation.isSystemInDarkTheme()) IncomeGreenDark else IncomeGreenLight

@@ -64,7 +64,9 @@ fun ExpenseListScreen(
 
     val catByKey = remember(categories) { categories.associateBy { it.id } }
     val tagById = remember(allTags) { allTags.associateBy { it.id } }
-    val total = remember(expenses) { expenses.map { it.amount }.sum() }
+    val total = remember(expenses) { expenses.expenseSum() }
+    val income = remember(expenses) { expenses.incomeSum() }
+    val expenseCount = remember(expenses) { expenses.count { !it.isIncome } }
 
     var menuOpen by remember { mutableStateOf(false) }
     var filterOpen by remember { mutableStateOf(false) }
@@ -151,7 +153,9 @@ fun ExpenseListScreen(
                 HeroCard(
                     title = month.title(),
                     total = total,
+                    income = income,
                     count = expenses.size,
+                    expenseCount = expenseCount,
                     unlocked = unlocked,
                     filter = filter,
                     categories = catByKey,
@@ -183,9 +187,19 @@ fun ExpenseListScreen(
                     ) {
                         Text(day.dayTitle(), style = MaterialTheme.typography.labelLarge,
                              color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(formatYuan(items.map { it.amount }.sum()),
-                             style = MaterialTheme.typography.labelLarge,
-                             color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        // 当天有收入时前面多一个绿色的 +¥X（对位 iOS `DayTotals`）
+                        val dayIncome = items.incomeSum()
+                        val dayExpense = items.expenseSum()
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (dayIncome.signum() > 0) {
+                                Text(formatIncome(dayIncome), style = MaterialTheme.typography.labelLarge,
+                                     color = incomeColor())
+                            }
+                            if (dayExpense.signum() > 0 || dayIncome.signum() == 0) {
+                                Text(formatYuan(dayExpense), style = MaterialTheme.typography.labelLarge,
+                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
                     }
                 }
                 itemsIndexed(items, key = { _, e -> e.id }) { i, e ->
@@ -249,7 +263,9 @@ private fun FilterAction(active: Boolean, onClick: () -> Unit) {
 private fun HeroCard(
     title: String,
     total: BigDecimal,
+    income: BigDecimal,
     count: Int,
+    expenseCount: Int,
     unlocked: Boolean,
     filter: ExpenseFilter,
     categories: Map<String, CategoryEntity>,
@@ -285,10 +301,23 @@ private fun HeroCard(
                 IconButton(onClick = onNext) { Icon(Icons.Filled.ChevronRight, "下个月") }
             }
 
+            // 只有收入、一笔支出都没有时（比如筛了「工资」），大数字改显示收入 ——
+            // 不然看到的是一个大大的 ¥0.00。规则跟 iOS 明细页卡片一样
+            val incomeCount = count - expenseCount
+            val incomeIsHeadline = expenseCount == 0 && incomeCount > 0
+            val caption = if (incomeIsHeadline) "本月收入 · 共 $incomeCount 笔" else "本月支出 · 共 $expenseCount 笔"
             Text(
-                formatYuan(total),
+                if (incomeIsHeadline) formatIncome(income) else formatYuan(total),
                 style = MaterialTheme.typography.displaySmall.copy(fontWeight = FontWeight.Bold),
+                color = if (incomeIsHeadline) incomeColor() else LocalContentColor.current,
             )
+            // 支出、收入都有时多一行：收入 +¥X · 结余 ¥Y（结余 = 收入 − 支出，可以是负的）
+            if (!incomeIsHeadline && incomeCount > 0) {
+                Text(
+                    "收入 ${formatIncome(income)} · 结余 ${formatSigned(income - total)}",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+            }
 
             when {
                 !filter.isEmpty -> {
@@ -315,7 +344,7 @@ private fun HeroCard(
                 unlocked -> {
                     // ⚠️⚠️ 解锁态**一定要有明显标记**：不然自己忘了开着、随手把手机递出去就露了。
                     // 这是整个私密功能里**唯一一处故意显眼**的 UI（锁着的时候界面上一点痕迹都没有）。
-                    Text("本月支出 · 共 $count 笔（含私密）",
+                    Text("$caption（含私密）",
                          style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(6.dp))
                     FilledTonalButton(onClick = onSecretTap) {
@@ -325,7 +354,7 @@ private fun HeroCard(
                     }
                 }
 
-                else -> Text("本月支出 · 共 $count 笔",
+                else -> Text(caption,
                              style = MaterialTheme.typography.bodySmall)
             }
         }
@@ -471,7 +500,13 @@ private fun ExpenseRow(
                 }
             }
             Spacer(Modifier.width(8.dp))
-            Text(formatYuan(e.amount), style = MaterialTheme.typography.titleMedium)
+            // 收入带「+」、用绿色；支出照旧不带符号（对位 iOS ExpenseRow）
+            if (e.isIncome) {
+                Text(formatIncome(e.magnitude), style = MaterialTheme.typography.titleMedium,
+                     color = incomeColor())
+            } else {
+                Text(formatYuan(e.amount), style = MaterialTheme.typography.titleMedium)
+            }
         }
     }
 }

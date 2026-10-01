@@ -7,6 +7,7 @@ import com.shize.expensetracker.data.Repository
 import com.shize.expensetracker.data.Settings
 import com.shize.expensetracker.sync.SyncWorker
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import java.time.YearMonth
 
 /// 整个 app 的入口 + 依赖容器。
@@ -42,6 +43,11 @@ class App : Application() {
         // 这个 15 分钟的任务很可能不会按时跑 —— 所以它只是兜底，
         // 真正靠得住的是「开 app 同步一次 + 每次写入之后同步一次 + 手动下拉」。
         SyncWorker.schedulePeriodic(this)
+        // 收入预设：只在第一次升到有收入功能的版本时种（见 Repository.seedIncomeCategories）。
+        // 跟下面那次同步是并发的，安全性靠种预设用的是「已有就不写」，见 CategoryDao.insertIfAbsent
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            repository.seedIncomeCategories()
+        }
         // 开 app 就同步一次
         SyncWorker.syncNow(this)
     }

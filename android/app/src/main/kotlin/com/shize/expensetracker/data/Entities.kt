@@ -26,6 +26,10 @@ interface Syncable {
 @Entity(tableName = "expense", indices = [Index("date"), Index("dirty")])
 data class ExpenseEntity(
     @PrimaryKey override val id: String,
+    /// 金额。**正数 = 支出，负数 = 收入**（2026-10-01 加收入时定的，两端 + 协议一致）。
+    /// ⚠️ 界面上一律不直接显示它的正负号 —— 显示用 `magnitude` + `isIncome`；
+    ///    求和一律走 ui/Money.kt 的 `expenseSum()` / `incomeSum()`，**不许直接把 amount 加起来**：
+    ///    收入混进去会把「本月支出」抵掉一块，而且看着像少记了账。
     val amount: BigDecimal,
     /// 分类**代号**（不是显示名）。对应 CategoryEntity.id
     val categoryKey: String,
@@ -39,7 +43,13 @@ data class ExpenseEntity(
     override val updatedAt: Long,
     override val deleted: Boolean = false,
     override val dirty: Boolean = false,
-) : Syncable
+) : Syncable {
+    /// 是不是一笔收入（金额是负数）
+    val isIncome: Boolean get() = amount.signum() < 0
+
+    /// 金额的绝对值，界面上显示用
+    val magnitude: BigDecimal get() = amount.abs()
+}
 
 @Entity(tableName = "tag", indices = [Index("dirty")])
 data class TagEntity(
@@ -75,7 +85,40 @@ data class CategoryEntity(
     override val updatedAt: Long,
     override val deleted: Boolean = false,
     override val dirty: Boolean = false,
-) : Syncable
+) : Syncable {
+    /// 收入分类：代号带「收入:」前缀（见 CategoryKind）。建好就定了，跟 id 一样永不改
+    val isIncome: Boolean get() = CategoryKind.isIncome(id)
+}
+
+/// 支出分类 / 收入分类（2026-10-01 加收入时加的）。
+///
+/// 收入分类的代号一律是「收入:」+ 名字（`收入:工资`），支出分类照旧（`餐饮`）。
+/// 这样**同步协议一个字段都不用加、服务器一行都不用改**：分类的 id 就是代号，前缀跟着 id 走。
+/// 加字段的话有个坑：还没升级的那台设备不认识这个字段，它一改这个分类再推上去，
+/// 字段就被它丢了 —— 收入分类悄悄变回支出分类，而且没有任何报错。
+///
+/// ⚠️ 跟 iOS `CategoryKind`（Category.swift）**一个字都不能差**，预设清单也必须一样
+object CategoryKind {
+    const val INCOME_PREFIX = "收入:"
+    fun isIncome(key: String) = key.startsWith(INCOME_PREFIX)
+
+    /// 收入分类的排序号从这里起跳，跟支出分类（从 0 起）分开两段、各排各的
+    const val INCOME_SORT_BASE = 1000
+
+    const val INCOME_FALLBACK_KEY = "收入:其他"
+
+    /// 收入预设。⚠️ 代号、名字、图标、颜色下标跟 iOS `CategorySeed.builtInIncome` 逐项一致
+    data class Seed(val key: String, val name: String, val icon: String, val color: Int)
+    val builtInIncome = listOf(
+        Seed("收入:工资", "工资", "banknote.fill", 10),
+        Seed("收入:奖金", "奖金", "star.fill", 12),
+        Seed("收入:理财", "理财", "chart.line.uptrend.xyaxis", 11),
+        Seed("收入:红包", "红包", "envelope.fill", 5),
+        Seed("收入:退款", "退款", "arrow.uturn.backward.circle.fill", 1),
+        Seed("收入:兼职", "兼职", "briefcase.fill", 6),
+        Seed("收入:其他", "其他收入", "ellipsis.circle.fill", 9),
+    )
+}
 
 /// 「某笔账挂了某个标签」这件事本身，是一条独立记录。
 ///

@@ -5,7 +5,10 @@ import UIKit
 // MARK: - CSV（给 AI 分析用）
 
 enum ExpenseCSV {
-    static let header = "记账时间,创建时间,金额,分类,备注,标签"
+    /// ⚠️ 「收支」一列是 2026-10-01 加收入时插进来的，金额列从此**恒为正数**。
+    /// 不直接导出带负号的金额：拿给 AI 分析时，「−5000」很容易被当成退款或者写错了，
+    /// 单独一列写明「收入」没有歧义。安卓那边导出的列必须跟这里一模一样
+    static let header = "记账时间,创建时间,收支,金额,分类,备注,标签"
 
     /// 一行一笔。时间用 `2026-08-19 12:18:32`，AI 不用猜格式；标签多个用 `|` 隔开
     /// `catalog` 用来把分类代号翻成显示名（分类改过名的话，导出里也要是新名字）。
@@ -15,7 +18,8 @@ enum ExpenseCSV {
             [
                 e.date.fullStampTitle,
                 e.createdAt.fullStampTitle,
-                "\(e.amount)",
+                e.isIncome ? "收入" : "支出",
+                "\(e.magnitude)",
                 catalog?.name(forKey: e.categoryRaw) ?? e.categoryRaw,
                 e.note,
                 e.tags.map(\.name).joined(separator: "|"),
@@ -67,9 +71,12 @@ enum ExpenseCSV {
 /// 所以只能像这样把内容重新画一遍——但行样式直接复用 `ExpenseRow`，画出来跟界面一模一样。
 struct ExportImageView: View {
     let title: String
+    /// 支出合计
     let total: Decimal
+    /// 收入合计。是 0 就不显示收入那一行
+    let income: Decimal
     let count: Int
-    let days: [(date: Date, items: [Expense], total: Decimal)]
+    let days: [(date: Date, items: [Expense], total: Decimal, income: Decimal)]
     let footer: String
 
     /// 渲染宽度。用固定值而不是当前屏宽：导出的图跟在哪台设备上导的无关，
@@ -85,7 +92,7 @@ struct ExportImageView: View {
                         HStack {
                             Text(day.date.dayTitle)
                             Spacer()
-                            Text(day.total.yuan).monospacedDigit()
+                            DayTotals(expense: day.total, income: day.income)
                         }
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.secondary)
@@ -133,6 +140,13 @@ struct ExportImageView: View {
             Text("共 \(count) 笔")
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.78))
+            // 蓝色渐变底上不用绿字（看不清），收入这一行跟其它字一样用白色
+            if income > 0 {
+                Text("收入 \(income.incomeYuan) · 结余 \((income - total).yuan)")
+                    .font(.subheadline.weight(.medium))
+                    .monospacedDigit()
+                    .foregroundStyle(.white.opacity(0.92))
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 22)
@@ -180,7 +194,8 @@ struct ExportSheet: View {
         }
     }
 
-    private var total: Decimal { records.amountSum }
+    private var total: Decimal { records.expenseSum }
+    private var income: Decimal { records.incomeSum }
 
     // MARK: 长图的尺寸保护
     //
@@ -276,7 +291,7 @@ struct ExportSheet: View {
                 } header: {
                     Text("给 AI 分析")
                 } footer: {
-                    Text("一行一笔，含记账时间、创建时间、金额、分类、备注、标签。手机上直接「复制成文本」粘给 AI 最快，要存档或者用 Excel 打开就导文件。")
+                    Text("一行一笔，含记账时间、创建时间、收支、金额、分类、备注、标签。手机上直接「复制成文本」粘给 AI 最快，要存档或者用 Excel 打开就导文件。")
                 }
 
                 Section {
@@ -376,6 +391,7 @@ struct ExportSheet: View {
         ExportImageView(
             title: scopeTitle,
             total: total,
+            income: income,
             count: records.count,
             days: records.groupedByDay(),
             footer: "记账本 · 导出于 \(stamp)"

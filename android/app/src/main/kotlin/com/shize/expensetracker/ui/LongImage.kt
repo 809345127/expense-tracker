@@ -58,14 +58,16 @@ object LongImage {
     private const val FOOTER_H = 56f
     private const val CARD_RADIUS = 16f
 
-    data class Day(val date: LocalDate, val items: List<ExpenseEntity>, val total: BigDecimal)
+    /// `total` 是当天**支出**合计，`income` 是当天收入合计（没有收入时是 0）
+    data class Day(val date: LocalDate, val items: List<ExpenseEntity>,
+                   val total: BigDecimal, val income: BigDecimal)
 
     /// 按天分组、天倒序（跟明细页一致）
     fun group(expenses: List<ExpenseEntity>): List<Day> =
         expenses.groupBy { it.date.toLocalDate() }
             .toSortedMap(reverseOrder())
             .map { (d, items) ->
-                Day(d, items.sortedByDescending { it.date }, items.map { it.amount }.sum())
+                Day(d, items.sortedByDescending { it.date }, items.expenseSum(), items.incomeSum())
             }
 
     /// 这张图在 1 倍下有多高（逻辑点）。**纯加法，没有任何猜测** ——
@@ -97,6 +99,8 @@ object LongImage {
     fun render(
         title: String,
         total: BigDecimal,
+        /// 收入合计。是 0 就不显示收入那一截
+        income: BigDecimal,
         count: Int,
         days: List<Day>,
         categories: List<CategoryEntity>,
@@ -138,15 +142,29 @@ object LongImage {
                    text(15f, AndroidColor.argb(235, 255, 255, 255)).apply { textAlign = Paint.Align.CENTER })
         c.drawText(formatYuan(total), WIDTH_PT / 2, 78f,
                    text(34f, AndroidColor.WHITE, bold = true).apply { textAlign = Paint.Align.CENTER })
-        c.drawText("共 $count 笔", WIDTH_PT / 2, 100f,
+        // 收入跟笔数挤在同一行：头部高度是写死的（HEADER_H），多加一行就要重算整张图的高度
+        val countLine = if (income.signum() > 0)
+            "共 $count 笔 · 收入 ${formatIncome(income)} · 结余 ${formatSigned(income - total)}"
+        else "共 $count 笔"
+        c.drawText(countLine, WIDTH_PT / 2, 100f,
                    text(12f, AndroidColor.argb(200, 255, 255, 255)).apply { textAlign = Paint.Align.CENTER })
 
         // ---- 按天 ----
         var y = HEADER_H + TOP_GAP
         for ((i, day) in days.withIndex()) {
             c.drawText(day.date.dayTitle(), PAD + 4f, y + 17f, text(13f, inkSub, bold = true))
-            c.drawText(formatYuan(day.total), WIDTH_PT - PAD - 4f, y + 17f,
-                       text(13f, inkSub, bold = true, right = true))
+            // 当天有收入：右边先画支出（没有支出就不画），再往左画绿色的 +¥X
+            val dayPaint = text(13f, inkSub, bold = true, right = true)
+            var right = WIDTH_PT - PAD - 4f
+            if (day.total.signum() > 0 || day.income.signum() == 0) {
+                val t = formatYuan(day.total)
+                c.drawText(t, right, y + 17f, dayPaint)
+                right -= dayPaint.measureText(t) + 8f
+            }
+            if (day.income.signum() > 0) {
+                c.drawText(formatIncome(day.income), right, y + 17f,
+                           text(13f, IncomeGreenLight.toArgb(), bold = true, right = true))
+            }
             y += DAY_TITLE_H
 
             val cardTop = y
@@ -176,8 +194,10 @@ object LongImage {
 
                 // 第一行：有备注显示备注，否则显示分类名（跟明细页的口径一致）
                 val titleText = e.note.ifEmpty { catName } + if (e.isPrivate) "  🔒" else ""
-                val amountText = formatYuan(e.amount)
-                val amountPaint = text(15f, ink, bold = true, right = true)
+                // 收入带「+」、绿色（长图恒为浅色底，所以用浅色那一档绿）
+                val amountText = if (e.isIncome) formatIncome(e.magnitude) else formatYuan(e.amount)
+                val amountPaint = text(15f, if (e.isIncome) IncomeGreenLight.toArgb() else ink,
+                                       bold = true, right = true)
                 val amountWidth = amountPaint.measureText(amountText)
                 val titlePaint = text(15f, ink)
                 c.drawText(

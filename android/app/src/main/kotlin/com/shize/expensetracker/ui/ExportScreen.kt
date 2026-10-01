@@ -141,7 +141,8 @@ class ExportViewModel(app: Application) : AndroidViewModel(app) {
                 val bmp = withContext(Dispatchers.Default) {
                     LongImage.render(
                         title = scopeTitle(),
-                        total = records.value.map { it.amount }.sum(),
+                        total = records.value.expenseSum(),
+                        income = records.value.incomeSum(),
                         count = records.value.size,
                         days = days,
                         categories = cats,
@@ -221,7 +222,7 @@ fun ExportScreen(onBack: () -> Unit, vm: ExportViewModel = viewModel()) {
     val busy by vm.busy.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
 
-    val total = remember(records) { records.map { it.amount }.sum() }
+    val total = remember(records) { records.expenseSum() }
     val heightPt = remember(records) { LongImage.measureHeight(LongImage.group(records)) }
     val tooBig = LongImage.tooBig(heightPt)
 
@@ -289,7 +290,7 @@ fun ExportScreen(onBack: () -> Unit, vm: ExportViewModel = viewModel()) {
                 }
             }
             Text(
-                "一行一笔，含记账时间、创建时间、金额、分类、备注、标签。" +
+                "一行一笔，含记账时间、创建时间、收支、金额、分类、备注、标签。" +
                         "直接「复制成文本」粘给 AI 最快；要存档或者用 Excel 打开就导文件。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

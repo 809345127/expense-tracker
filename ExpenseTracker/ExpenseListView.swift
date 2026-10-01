@@ -47,6 +47,7 @@ struct ExpenseListScreen: View {
         NavigationStack {
             ExpenseList(month: $month, filter: $filter)
                 .navigationTitle("记账本")
+                .modifier(RootBottomToolbar())
                 .toolbar {
                     // ⚠️ 筛选和分享都放右边是**故意的**：iOS 26 起，同一 placement 里相邻的
                     // 工具栏按钮会自动合成一个玻璃胶囊（Apple 日历右上角那组就是这么来的）。
@@ -102,7 +103,7 @@ struct ExpenseListScreen: View {
             filter.categoryKeys = Set(catalog.all.filter { wanted.contains($0.name) }.map(\.key))
         }
         switch DevFlags.value("-openSheet") {
-        // form / tags 由 RootView 的悬浮按钮那套弹层负责，见 DevFlags 注释
+        // form / tags 由 RootView 的「记一笔」弹层负责，见 DevFlags 注释
         case "filter": showingFilter = true
         case "export": showingExport = true
         default: break
@@ -165,10 +166,35 @@ private struct ExpenseList: View {
         return f
     }
 
-    private var monthTotal: Decimal { visible.amountSum }
+    private var monthTotal: Decimal { visible.expenseSum }
+    private var monthIncome: Decimal { visible.incomeSum }
+    private var expenseCount: Int { visible.expensesOnly.count }
+    private var incomeCount: Int { visible.incomesOnly.count }
+
+    /// 这个月（或筛选结果）**只有收入、一笔支出都没有**时，大数字改显示收入。
+    /// 不然筛「工资」看到的是一个大大的 ¥0.00，收入反而缩在下面一行小字里
+    private var incomeIsHeadline: Bool { expenseCount == 0 && incomeCount > 0 }
+
+    /// 卡片上「本月支出 · 共 N 笔」那句的前半截和笔数，跟着大数字是哪一种走
+    private var headlineCaption: String {
+        incomeIsHeadline ? "本月收入 · 共 \(incomeCount) 笔" : "本月支出 · 共 \(expenseCount) 笔"
+    }
+
+    /// 支出和收入**都有**时多出来的一行：收入 +¥X · 结余 ¥Y（结余 = 收入 − 支出，可以是负的）
+    @ViewBuilder private var incomeLine: some View {
+        if !incomeIsHeadline && incomeCount > 0 {
+            HStack(spacing: 6) {
+                Text("收入 \(monthIncome.incomeYuan)").foregroundStyle(Color.income)
+                Text("·").foregroundStyle(cardFGSecondary)
+                Text("结余 \((monthIncome - monthTotal).yuan)").foregroundStyle(cardFGSecondary)
+            }
+            .font(.subheadline.weight(.medium))
+            .monospacedDigit()
+        }
+    }
 
     /// 按天分组。实现在 Models.swift 的 groupedByDay()，导出长图用的是同一份
-    private var days: [(date: Date, items: [Expense], total: Decimal)] {
+    private var days: [(date: Date, items: [Expense], total: Decimal, income: Decimal)] {
         visible.groupedByDay()
     }
 
@@ -187,7 +213,7 @@ private struct ExpenseList: View {
                         systemImage: isFiltering ? "line.3.horizontal.decrease.circle" : "tray",
                         description: Text(isFiltering
                                           ? "换个条件，或者点上面的「清除筛选」"
-                                          : "点右上角 + 记下第一笔")
+                                          : "点右下角 + 记下第一笔")
                     )
                     .listRowBackground(Color.clear)
                 }
@@ -215,15 +241,14 @@ private struct ExpenseList: View {
                     HStack {
                         Text(day.date.dayTitle)
                         Spacer()
-                        Text(day.total.yuan).monospacedDigit()
+                        DayTotals(expense: day.total, income: day.income)
                     }
                 }
             }
         }
-        // 底部给悬浮的「记一笔」按钮让出位置：不留的话滚到最后一行会一直压在按钮下面
-        #if DEBUG
+                #if DEBUG
         // -scrollBottom：启动后自动滚到最后一行。
-        // 这台机器点不了屏幕，「滚到底会不会被悬浮按钮压住」只能靠它截图核。
+        // 这台机器点不了屏幕，「滚到底会不会被底部工具栏压住」只能靠它截图核。
         // ⚠️ 它是**故意**用程序化滚动的：程序化滚动会绕过 contentMargins，
         //    所以这条路径同时也在盯着「别把 safeAreaInset 改回 contentMargins」。
         .onAppear {
@@ -273,10 +298,11 @@ private struct ExpenseList: View {
                 // 锁着 → 走 Face ID；已经开着 → 直接关上（省得去找退出按钮）
                 if gate.isUnlocked { gate.lock() } else { Task { await gate.unlock() } }
             }
-            Text(monthTotal.yuan)
+            Text(incomeIsHeadline ? monthIncome.incomeYuan : monthTotal.yuan)
                 .font(.system(size: 36, weight: .bold, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(cardFG)
+                .foregroundStyle(incomeIsHeadline ? Color.income : cardFG)
+            incomeLine
             if isFiltering {
                 VStack(spacing: 4) {
                     Text("已筛选：\(filterForDisplay.summary) · 共 \(visible.count) 笔")
@@ -307,7 +333,7 @@ private struct ExpenseList: View {
                 // 解锁态一定要有明显标记：不然你自己忘了开着、随手把手机递出去就露了。
                 // 这是整个功能里唯一一处「故意显眼」的 UI。
                 VStack(spacing: 4) {
-                    Text("本月支出 · 共 \(visible.count) 笔（含私密）")
+                    Text("\(headlineCaption)（含私密）")
                         .font(.caption)
                         .foregroundStyle(cardFGSecondary)
                     Button {
@@ -327,7 +353,7 @@ private struct ExpenseList: View {
                     .padding(.top, 2)
                 }
             } else {
-                Text("本月支出 · 共 \(visible.count) 笔")
+                Text(headlineCaption)
                     .font(.caption)
                     .foregroundStyle(cardFGSecondary)
             }
@@ -425,11 +451,27 @@ struct ExpenseRow: View {
                 }
             }
             Spacer()
-            Text(expense.amount.yuan)
+            // 收入带「+」、用绿色；支出照旧不带符号 —— 绝大多数行是支出，给它们都挂个「−」是噪音
+            Text(expense.isIncome ? expense.magnitude.incomeYuan : expense.amount.yuan)
                 .font(.body.weight(.semibold))
                 .monospacedDigit()
+                .foregroundStyle(expense.isIncome ? Color.income : .primary)
         }
         .padding(.vertical, 4)
     }
 }
 
+/// 每天那一组标题右边的合计。只有支出时跟原来一样只显示 `¥28.50`；
+/// 当天有收入时前面多一个绿色的 `+¥5,000.00`。导出长图复用它，所以不是 private
+struct DayTotals: View {
+    let expense: Decimal
+    let income: Decimal
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if income > 0 { Text(income.incomeYuan).foregroundStyle(Color.income) }
+            if expense > 0 || income == 0 { Text(expense.yuan) }
+        }
+        .monospacedDigit()
+    }
+}

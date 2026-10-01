@@ -79,17 +79,17 @@ enum TombstoneProbe {
 
         // ---- 逐个界面口径 ----
         check("明细页笔数（visible）", all.visible(unlocked: unlocked).count, visibleWant.count)
-        check("明细页合计（visible）", all.visible(unlocked: unlocked).amountSum, visibleWant.amountSum)
+        check("明细页合计（visible）", all.visible(unlocked: unlocked).expenseSum, visibleWant.expenseSum)
         check("按天分组的总条数", all.visible(unlocked: unlocked).groupedByDay().reduce(0) { $0 + $1.items.count }, visibleWant.count)
 
         // 统计页跟明细页共用 visible，所以口径必须一致 —— 对不上就是「藏了东西」那类漏点
         check("统计页笔数", all.visible(unlocked: unlocked).count, visibleWant.count)
-        check("统计页总额", all.visible(unlocked: unlocked).amountSum, visibleWant.amountSum)
+        check("统计页总额", all.visible(unlocked: unlocked).expenseSum, visibleWant.expenseSum)
 
         // 小组件：恒按锁定态算（隐私红线）
         let widgetWant = liveWant.filter { !$0.isPrivate }
         check("小组件笔数（恒锁定态）", all.visible(unlocked: false).count, widgetWant.count)
-        check("小组件总额（恒锁定态）", all.visible(unlocked: false).amountSum, widgetWant.amountSum)
+        check("小组件总额（恒锁定态）", all.visible(unlocked: false).expenseSum, widgetWant.expenseSum)
 
         // 导出 CSV：行数 = 表头 1 行 + 记录数
         let csv = ExpenseCSV.make(from: all.visible(unlocked: unlocked), catalog: catalog)

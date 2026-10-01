@@ -138,8 +138,21 @@ class ExportTest {
             listOf(expense("e1", "12.00", "餐饮", note = "无特殊字符")),
             cats, emptyList(), emptyList())
         assertEquals(ExpenseCsv.HEADER, csv.lines()[0])
-        assertEquals(6, csv.lines()[0].split(",").size)
-        assertEquals(6, csv.lines()[1].split(",").size)
+        assertEquals(7, csv.lines()[0].split(",").size)
+        assertEquals(7, csv.lines()[1].split(",").size)
+    }
+
+    @Test
+    fun `收入导出成「收入」+ 正数金额，支出照旧`() {
+        val csv = ExpenseCsv.make(
+            listOf(expense("e1", "-8500.00", "收入:工资"), expense("e2", "24.50", "餐饮")),
+            cats, emptyList(), emptyList())
+        val income = csv.lines()[1].split(",")
+        val spend = csv.lines()[2].split(",")
+        assertEquals("收入", income[2]); assertEquals("8500.00", income[3])
+        assertEquals("支出", spend[2]); assertEquals("24.50", spend[3])
+        // 控制组：原始金额确实是负数 —— 证明正数是导出那一步转的，不是测试数据本来就是正的
+        assertTrue(BigDecimal("-8500.00").signum() < 0)
     }
 
     // ------------------------------------------------------------ 长图

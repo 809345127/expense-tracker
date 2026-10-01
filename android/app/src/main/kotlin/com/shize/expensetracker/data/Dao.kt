@@ -134,6 +134,16 @@ interface CategoryDao {
 
     @Query("SELECT COUNT(*) FROM category WHERE deleted = 0")
     suspend fun count(): Int
+
+    /// 有没有任何收入分类（**含已删的墓碑**）。种收入预设前看一眼，见 Repository.seedIncomeCategories
+    @Query("SELECT COUNT(*) FROM category WHERE id LIKE '收入:%'")
+    suspend fun incomeCountRaw(): Int
+
+    /// ⚠️ 种预设专用：**已经有这一行就什么都不做**（IGNORE，不是 REPLACE）。
+    /// 种预设跟开 app 那次同步是并发跑的；用 REPLACE 的话，同步刚拉下来的真实版本
+    /// （比如改过名的「工资」）会被默认值盖掉，再推上去还会被服务器当成旧数据拒掉
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIfAbsent(items: List<CategoryEntity>)
 }
 
 @Dao

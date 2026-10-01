@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -110,12 +111,23 @@ fun StatsScreen(
 ) {
     val month by vm.month.collectAsStateWithLifecycle()
     val unlocked by vm.unlocked.collectAsStateWithLifecycle()
-    val expenses by vm.expenses.collectAsStateWithLifecycle()
+    val allVisible by vm.expenses.collectAsStateWithLifecycle()
     val categories by vm.categories.collectAsStateWithLifecycle()
     val tags by vm.tags.collectAsStateWithLifecycle()
     val links by vm.links.collectAsStateWithLifecycle()
 
-    val total = remember(expenses) { expenses.map { it.amount }.sum() }
+    // 「支出 | 收入」切换（对位 iOS StatsContent.Kind）。两种钱不能混在一张圆环里：
+    // 工资占 95% 的话，所有支出分类都会被挤成一条细缝。
+    // 这个月没有收入就**不显示切换**，而且自动退回「支出」——
+    // 不然切到收入后翻到一个没有收入的月份，整页是空的、又没有地方切回来
+    var showIncome by rememberSaveable { mutableStateOf(false) }
+    val hasIncome = remember(allVisible) { allVisible.any { it.isIncome } }
+    val incomeMode = showIncome && hasIncome
+    val kindLabel = if (incomeMode) "收入" else "支出"
+    val expenses = remember(allVisible, incomeMode) { allVisible.filter { it.isIncome == incomeMode } }
+
+    // ⚠️ 下面一律用 magnitude：收入的 amount 是负数
+    val total = remember(expenses) { expenses.map { it.magnitude }.sum() }
     val catStats = remember(expenses, categories, total) { categoryStats(expenses, categories, total) }
     val tagStats = remember(expenses, tags, links, total) { tagStats(expenses, tags, links, total) }
     val dailyAvg = remember(expenses, month, total) { dailyAverage(total, month) }
@@ -143,6 +155,18 @@ fun StatsScreen(
             Spacer(Modifier.height(2.dp))
             MonthSwitcher(month.title(), unlocked, vm::prevMonth, vm::nextMonth, onToggleLock)
 
+            if (hasIncome) {
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 48.dp)) {
+                    listOf(false to "支出", true to "收入").forEachIndexed { i, (v, label) ->
+                        SegmentedButton(
+                            selected = incomeMode == v,
+                            onClick = { showIncome = v },
+                            shape = SegmentedButtonDefaults.itemShape(i, 2),
+                        ) { Text(label) }
+                    }
+                }
+            }
+
             if (expenses.isEmpty()) {
                 Box(Modifier.fillMaxWidth().padding(top = 64.dp), Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally,
@@ -155,11 +179,11 @@ fun StatsScreen(
                     }
                 }
             } else {
-                Tiles(total = total, count = expenses.size, dailyAvg = dailyAvg)
-                Donut(catStats, total)
+                Tiles(kindLabel, total = total, count = expenses.size, dailyAvg = dailyAvg)
+                Donut(catStats, total, kindLabel)
                 CategoryRanking(catStats) { onDrillDown(ExpenseFilter.onlyCategory(it)) }
                 if (tagStats.any { !it.untagged }) {
-                    TagRanking(tagStats) { id ->
+                    TagRanking(tagStats, kindLabel) { id ->
                         // ⚠️「未打标签」那一行点了没意义 —— 筛选条件表达不了「没有标签」
                         // 这个否定条件（`tagIds` 是「命中其中任意一个」）。所以那行不给点，
                         // 传上来的 id 是 null
@@ -216,14 +240,14 @@ private fun MonthSwitcher(
 }
 
 @Composable
-private fun Tiles(total: BigDecimal, count: Int, dailyAvg: BigDecimal) {
+private fun Tiles(kindLabel: String, total: BigDecimal, count: Int, dailyAvg: BigDecimal) {
     // ⚠️ 三个瓦片各用一种主题色调（primary / secondary / tertiary 的容器色），
     // 不再是三个一样的灰盒子。这个 app 开着**动态取色**（配色跟着系统壁纸走），
     // 而改版之前整屏只有一种灰、主色只出现在 FAB 上 —— 等于把 Material You 白开了。
     // 这三个色调是系统按壁纸算出来的同一族，所以不会撞色、也不用自己调。
     val cs = MaterialTheme.colorScheme
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Tile("总支出", formatYuan(total), cs.primaryContainer, cs.onPrimaryContainer, Modifier.weight(1f))
+        Tile("总$kindLabel", formatYuan(total), cs.primaryContainer, cs.onPrimaryContainer, Modifier.weight(1f))
         Tile("笔数", "$count", cs.secondaryContainer, cs.onSecondaryContainer, Modifier.weight(1f))
         Tile("日均", formatYuan(dailyAvg), cs.tertiaryContainer, cs.onTertiaryContainer, Modifier.weight(1f))
     }
@@ -265,7 +289,7 @@ private fun Tile(
 /// （而且这个项目的依赖版本要一个个去查 maven-metadata 核对，成本是实打实的）。
 /// iOS 那边用的是系统自带的 Swift Charts，那边不用额外依赖。
 @Composable
-private fun Donut(stats: List<CategoryStat>, total: BigDecimal) {
+private fun Donut(stats: List<CategoryStat>, total: BigDecimal, kindLabel: String) {
     val colors = stats.map { categoryColor(it.colorIndex) }
     val sweeps = stats.map { it.share * 360f }
 
@@ -303,7 +327,7 @@ private fun Donut(stats: List<CategoryStat>, total: BigDecimal) {
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally,
                verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("总支出", style = MaterialTheme.typography.bodySmall,
+            Text("总$kindLabel", style = MaterialTheme.typography.bodySmall,
                  color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(formatYuan(total),
                  style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
@@ -338,7 +362,7 @@ private fun CategoryRanking(stats: List<CategoryStat>, onPick: (String) -> Unit)
 }
 
 @Composable
-private fun TagRanking(stats: List<TagStat>, onPick: (String?) -> Unit) {
+private fun TagRanking(stats: List<TagStat>, kindLabel: String, onPick: (String?) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
         Text("按标签", style = MaterialTheme.typography.titleSmall,
              modifier = Modifier.padding(start = 4.dp, top = 4.dp, bottom = 6.dp))
@@ -357,7 +381,7 @@ private fun TagRanking(stats: List<TagStat>, onPick: (String?) -> Unit) {
         }
         // ⚠️ 这句话不能省：不写清楚重叠，这几行加起来超过总支出会让人以为算错了
         Text(
-            "一笔可以打多个标签，所以上面各行之间会重叠、加起来会超过本月总支出。「未打标签」那行不与其它行重叠。",
+            "一笔可以打多个标签，所以上面各行之间会重叠、加起来会超过本月总$kindLabel。「未打标签」那行不与其它行重叠。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 4.dp, end = 4.dp, top = 8.dp),
@@ -424,7 +448,7 @@ private fun categoryStats(
     val byKey = categories.associateBy { it.id }
     val totalD = total.toDouble()
     return expenses.groupBy { it.categoryKey }.map { (key, items) ->
-        val sum = items.map { it.amount }.sum()
+        val sum = items.map { it.magnitude }.sum()
         val def = byKey[key]
         CategoryStat(
             key = key,
@@ -467,13 +491,13 @@ private fun tagStats(
         // 否则排行里会冒出一行没有名字的空标签
         val ts = (tagIdsByExpense[e.id] ?: emptyList()).mapNotNull { tagById[it] }.filter { !it.deleted }
         if (ts.isEmpty()) {
-            untaggedTotal += e.amount
+            untaggedTotal += e.magnitude
             untaggedCount++
             continue
         }
         for (t in ts) {
             val row = sums[t.id] ?: Triple(t, BigDecimal.ZERO, 0)
-            sums[t.id] = Triple(t, row.second + e.amount, row.third + 1)
+            sums[t.id] = Triple(t, row.second + e.magnitude, row.third + 1)
         }
     }
 

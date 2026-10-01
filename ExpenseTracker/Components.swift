@@ -1,4 +1,16 @@
 import SwiftUI
+import UIKit
+
+extension Color {
+    /// 收入金额的绿色。
+    /// ⚠️ 不用系统的 `.green`：它在白底上对比度只有 2.2:1，金额读不清。
+    /// 浅色用深一档的绿（约 4.6:1），深色模式用系统绿（黑底上本来就够亮）
+    static let income = Color(UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor.systemGreen
+            : UIColor(red: 0.11, green: 0.52, blue: 0.24, alpha: 1)
+    })
+}
 
 /// 月份切换器：‹ 2026年8月 ›（明细、统计两页共用）
 struct MonthSwitcher: View {

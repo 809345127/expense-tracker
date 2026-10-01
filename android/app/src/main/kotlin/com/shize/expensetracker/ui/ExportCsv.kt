@@ -13,7 +13,9 @@ import java.util.Locale
 // **列和格式跟 iOS 那份 `ExpenseCSV` 一字对齐** —— 两台设备导出来的表能直接拼在一起。
 
 object ExpenseCsv {
-    const val HEADER = "记账时间,创建时间,金额,分类,备注,标签"
+    /// ⚠️ 「收支」一列是 2026-10-01 加收入时插进来的，金额列从此**恒为正数**
+    ///（拿给 AI 分析时「−5000」容易被当成退款或写错了）。必须跟 iOS ExpenseCSV.header 一模一样
+    const val HEADER = "记账时间,创建时间,收支,金额,分类,备注,标签"
 
     private val stamp = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
 
@@ -40,7 +42,8 @@ object ExpenseCsv {
                 time(e.createdAt),
                 // ⚠️ toPlainString 而不是 toString：BigDecimal 在某些标度下 toString
                 // 会给出科学计数法（1E+2），那样导出来的表里金额是一串鬼画符
-                e.amount.toPlainString(),
+                if (e.isIncome) "收入" else "支出",
+                e.magnitude.toPlainString(),
                 catName[e.categoryKey] ?: e.categoryKey,
                 e.note,
                 (tagsOf[e.id] ?: emptyList()).mapNotNull { tagName[it] }.joinToString("|"),

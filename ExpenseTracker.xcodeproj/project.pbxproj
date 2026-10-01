@@ -17,6 +17,7 @@
 		AB1000000000000000000D11 /* TombstoneProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000D12 /* TombstoneProbe.swift */; };
 		AB1000000000000000000D01 /* Sync.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000D02 /* Sync.swift */; };
 		AB10000000000000000000B3 /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB10000000000000000000F3 /* Components.swift */; };
+		AB1000000000000000000AK1 /* AmountKeypad.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000AK2 /* AmountKeypad.swift */; };
 		AB10000000000000000000B4 /* ExpenseListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB10000000000000000000F4 /* ExpenseListView.swift */; };
 		AB10000000000000000000B5 /* ExpenseFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB10000000000000000000F5 /* ExpenseFormView.swift */; };
 		AB10000000000000000000B6 /* StatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB10000000000000000000F6 /* StatsView.swift */; };
@@ -66,6 +67,7 @@
 		AB1000000000000000000D12 /* TombstoneProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TombstoneProbe.swift; sourceTree = "<group>"; };
 		AB1000000000000000000D02 /* Sync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync.swift; sourceTree = "<group>"; };
 		AB10000000000000000000F3 /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
+		AB1000000000000000000AK2 /* AmountKeypad.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmountKeypad.swift; sourceTree = "<group>"; };
 		AB10000000000000000000F4 /* ExpenseListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpenseListView.swift; sourceTree = "<group>"; };
 		AB10000000000000000000F5 /* ExpenseFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpenseFormView.swift; sourceTree = "<group>"; };
 		AB10000000000000000000F6 /* StatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsView.swift; sourceTree = "<group>"; };
@@ -132,6 +134,7 @@
 				AB1000000000000000000D12 /* TombstoneProbe.swift */,
 				AB1000000000000000000D02 /* Sync.swift */,
 				AB10000000000000000000F3 /* Components.swift */,
+				AB1000000000000000000AK2 /* AmountKeypad.swift */,
 				AB10000000000000000000F4 /* ExpenseListView.swift */,
 				AB10000000000000000000F5 /* ExpenseFormView.swift */,
 				AB1000000000000000000FB1 /* PrivacyGate.swift */,
@@ -281,6 +284,7 @@
 				AB1000000000000000000D11 /* TombstoneProbe.swift in Sources */,
 				AB1000000000000000000D01 /* Sync.swift in Sources */,
 				AB10000000000000000000B3 /* Components.swift in Sources */,
+				AB1000000000000000000AK1 /* AmountKeypad.swift in Sources */,
 				AB10000000000000000000B4 /* ExpenseListView.swift in Sources */,
 				AB10000000000000000000B5 /* ExpenseFormView.swift in Sources */,
 				AB1000000000000000000BB1 /* PrivacyGate.swift in Sources */,

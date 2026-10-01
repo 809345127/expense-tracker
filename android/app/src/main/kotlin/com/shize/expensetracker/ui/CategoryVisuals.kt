@@ -6,6 +6,8 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.automirrored.filled.DirectionsBike
 import androidx.compose.material.icons.automirrored.filled.DirectionsRun
 import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -84,6 +86,13 @@ private val iconMap: Map<String, ImageVector> = mapOf(
     "wifi" to Icons.Filled.Wifi,
     "ellipsis.circle.fill" to Icons.Filled.MoreHoriz,
     "questionmark.circle.fill" to Icons.Filled.QuestionMark,
+    // 收入（2026-10-01 加）
+    "star.fill" to Icons.Filled.Star,
+    "chart.line.uptrend.xyaxis" to Icons.AutoMirrored.Filled.TrendingUp,
+    "envelope.fill" to Icons.Filled.Mail,
+    "arrow.uturn.backward.circle.fill" to Icons.AutoMirrored.Filled.Undo,
+    "briefcase.fill" to Icons.Filled.Work,
+    "dollarsign.circle.fill" to Icons.Filled.MonetizationOn,
 )
 
 /// SF Symbols 名 → Material 图标。映射不上就给个问号（不崩、不改数据）
@@ -115,6 +124,8 @@ val categoryIconGroups: List<Pair<String, List<String>>> = listOf(
     "钱与其它" to listOf("arrow.triangle.2.circlepath", "creditcard.fill", "banknote.fill",
                       "pawprint.fill", "phone.fill", "wifi", "ellipsis.circle.fill",
                       "questionmark.circle.fill"),
+    "收入" to listOf("star.fill", "chart.line.uptrend.xyaxis", "envelope.fill",
+                    "arrow.uturn.backward.circle.fill", "briefcase.fill", "dollarsign.circle.fill"),
 )
 
 const val FALLBACK_ICON = "questionmark.circle.fill"

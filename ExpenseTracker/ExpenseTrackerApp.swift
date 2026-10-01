@@ -144,14 +144,16 @@ struct ExpenseTrackerApp: App {
 //
 // 这三件事各自比过几个方案，结论写在这里，免得以后有人「顺手改回去」：
 //
-// ① **「记一笔」放 tab 栏正上方的横条**（`tabViewBottomAccessory`）。
-//    最早放导航栏右上角 —— 16 Pro Max 单手够不着；
-//    改成底部正中悬浮圆钮 —— 实测跟 tab 栏**垂直重叠 61pt**，而且这个 app 只有两个 tab、
-//    水平正中恰好是两个按钮的接缝，结果两个 tab 都点不动；
-//    改用 `ToolbarItem(placement: .bottomBar)` —— 在 TabView 里会被塞到 tab 栏后面，
-//    按钮**压根不显示**。
-//    根因是前两种的坐标都由我们自己算、系统不知道它在哪。`tabViewBottomAccessory`
-//    是 iOS 26 起专门为这个场景做的 API，**位置由系统排版**，结构上压不到 tab 栏。
+// ① **「记一笔」在底部工具栏右下角，没有 tab 栏**（2026-10-01 改，左下角是「明细 | 统计」切换）。
+//    走过的路：导航栏右上角 —— 16 Pro Max 单手够不着；
+//    底部正中悬浮圆钮 —— 跟 tab 栏垂直重叠 61pt，两个 tab 都点不动；
+//    在 TabView 里挂 `.bottomBar` 工具栏 —— 被塞到 tab 栏后面，压根不显示；
+//    tab 栏正上方的横条（`tabViewBottomAccessory`）—— 用了一个多月，用户嫌「怪怪的」。
+//    查 HIG 原文才知道为什么：**tab 栏只用来切页面、不放操作，操作归工具栏**；
+//    那条横条规范举的例子是音乐的「正在播放」，放一颗按钮就像个播放条。
+//    这个 app 只有两页，用不着 tab 栏：去掉它，底部就能放工具栏 ——
+//    跟备忘录、提醒事项一个排法，「+」在拇指区，又是规范里放操作的地方。
+//    （tab 栏里塞第三格「+」也试过：系统不会把它分出来，看着就是第三个页面。）
 //    （Apple HIG 里没有「悬浮按钮」这个模式，那是 Material Design 的东西。）
 //
 // ② **顶部工具栏按钮成组、月度卡片用素净样式**。
@@ -172,7 +174,7 @@ struct RootView: View {
     @State private var tab: Tab
     @State private var month: Date // 明细/统计两页共享的「当前查看月份」
 
-    /// 「记一笔」弹层。跟着悬浮按钮一起放在两个 tab 的共同父级
+    /// 「记一笔」弹层。放在两页的共同父级：两页都能点「+」，不用先切回明细页
     @State private var showingAdd = false
     #if DEBUG
     @State private var appliedDebugSheet = false
@@ -227,22 +229,39 @@ struct RootView: View {
         }
     }
 
-    var body: some View {
-        TabView(selection: $tab) {
-            ExpenseListScreen(month: $month, filter: $filter)
-                .tabItem { Label("明细", systemImage: "list.bullet.rectangle.fill") }
-                .tag(Tab.list)
-            StatsScreen(month: $month) { newFilter in
-                // 统计页点了某一行：换成只看它，然后切过去看明细
-                filter = newFilter
-                tab = .list
-            }
-            .tabItem { Label("统计", systemImage: "chart.pie.fill") }
-            .tag(Tab.stats)
+    private var listScreen: some View {
+        ExpenseListScreen(month: $month, filter: $filter)
+    }
+
+    private var statsScreen: some View {
+        StatsScreen(month: $month) { newFilter in
+            // 统计页点了某一行：换成只看它，然后切过去看明细
+            filter = newFilter
+            tab = .list
         }
-        // 「记一笔」：tab 栏正上方一条横条，位置由系统排、压不到 tab 栏（理由见文件顶部 ①）。
-        // ⚠️ 挂在 TabView 上而不是某一页里：两个 tab 都能记一笔，不用先切回明细页
-        .modifier(AddEntryAccessory { showingAdd = true })
+    }
+
+    /// 两页仍然装在 TabView 里，只是把 tab 栏藏掉 —— 切页改由底部工具栏的分段控件做。
+    /// ⚠️ 不能写成 `switch tab { … }` 二选一：那样每切一次页面就整页重建，
+    /// 明细页滚到月中、去统计看一眼、回来又跳回顶部。TabView 会保住每页的状态。
+    /// ⚠️ 也试过 ZStack 两页叠着、把不看的那页调成透明：点击没问题，
+    /// 但那页的标题栏还留在读屏树里（UI 测试实测），旁白会念出看不见的东西。
+    /// TabView 自己管这些，不用操心。
+    /// ⚠️ 藏 tab 栏的修饰符要挂在**每一页上**，挂在 TabView 外面不生效
+    private var pages: some View {
+        TabView(selection: $tab) {
+            listScreen
+                .toolbar(.hidden, for: .tabBar)
+                .tag(Tab.list)
+            statsScreen
+                .toolbar(.hidden, for: .tabBar)
+                .tag(Tab.stats)
+        }
+        .environment(\.rootBottomBar, RootBottomBar(tab: $tab, add: { showingAdd = true }))
+    }
+
+    var body: some View {
+        pages
         .sheet(isPresented: $showingAdd) { ExpenseFormView() }
         // 桌面小组件点一下：add → 弹「记一笔」，home → 明细页。见 handleDeepLink 上面那张表
         .onOpenURL { handleDeepLink($0) }
@@ -282,29 +301,57 @@ struct RootView: View {
 
 }
 
-/// tab 栏上方那条「记一笔」。
-///
-/// ⚠️ `tabViewBottomAccessory` 要 iOS 26+，而这个工程的最低版本是 iOS 17
-/// （README 写明的），所以必须带版本判断。
-/// 低版本的降级实现用 `safeAreaInset` —— 它是**真的把安全区撑开**，
-/// 所以那条按钮同样压不到 tab 栏；不能改成 `.overlay`，那个会压上去（实测 61pt）。
-private struct AddEntryAccessory: ViewModifier {
-    let action: () -> Void
+/// RootView 把「切页 + 记一笔」交给每一页，由页面自己挂到底部工具栏上。
+/// ⚠️ 为什么绕这一道：工具栏属于**每一页自己的 NavigationStack**，
+/// 在 RootView 这一层挂 `.toolbar` 是不显示的（外面没有 NavigationStack 接它）
+struct RootBottomBar {
+    var tab: Binding<RootView.Tab>
+    var add: () -> Void
+}
 
-    private var label: some View {
-        Label("记一笔", systemImage: "plus")
-            .font(.body.weight(.medium))
-            .frame(maxWidth: .infinity)
+extension EnvironmentValues {
+    @Entry var rootBottomBar: RootBottomBar? = nil
+}
+
+/// 底部工具栏：左边「明细 | 统计」切换，右边「+」记一笔（理由见文件顶部 ①）。
+/// 明细页、统计页各自挂一次，两页长得一模一样，切页时看起来工具栏没动过。
+struct RootBottomToolbar: ViewModifier {
+    @Environment(\.rootBottomBar) private var bar
+
+    private func picker(_ bar: RootBottomBar) -> some View {
+        Picker("页面", selection: bar.tab) {
+            Text("明细").tag(RootView.Tab.list)
+            Text("统计").tag(RootView.Tab.stats)
+        }
+        .pickerStyle(.segmented)
+        .fixedSize()
     }
 
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.tabViewBottomAccessory { Button(action: action) { label } }
-        } else {
-            content.safeAreaInset(edge: .bottom) {
-                Button(action: action) { label.padding(.vertical, 12) }
-                    .background(.regularMaterial)
+        if let bar {
+            if #available(iOS 26.0, *) {
+                // 两个 ToolbarItem 中间放弹性空白，才会拆成左右两个独立的玻璃块；
+                // 不拆的话会合进同一个胶囊里
+                content.toolbar {
+                    ToolbarItem(placement: .bottomBar) { picker(bar) }
+                    ToolbarSpacer(.flexible, placement: .bottomBar)
+                    ToolbarItem(placement: .bottomBar) {
+                        Button("记一笔", systemImage: "plus", action: bar.add)
+                            .buttonStyle(.glassProminent)
+                    }
+                }
+            } else {
+                content.toolbar {
+                    ToolbarItemGroup(placement: .bottomBar) {
+                        picker(bar)
+                        Spacer()
+                        Button("记一笔", systemImage: "plus", action: bar.add)
+                            .buttonStyle(.borderedProminent)
+                    }
+                }
             }
+        } else {
+            content
         }
     }
 }
@@ -333,7 +380,8 @@ private struct WidgetSync: View {
     /// 变化检测用的指纹。⚠️ 不能只看笔数：改金额时笔数不变，光看笔数会漏掉更新
     private var digest: String {
         let visible = monthExpenses.visible(unlocked: false)
-        return "\(visible.count)|\(visible.amountSum)"
+        // 收入也算进指纹：一笔支出改成收入时，支出合计和笔数都会变，这里只是保险
+        return "\(visible.count)|\(visible.expenseSum)|\(visible.incomeSum)"
     }
 
     var body: some View {
@@ -344,19 +392,20 @@ private struct WidgetSync: View {
     }
 
     private func push() {
-        let visible = monthExpenses.visible(unlocked: false)   // ← 隐私红线，别改
+        // ⚠️ 小组件只显示**支出**（「本月花了多少」）。收入摘掉，不然笔数和前三名里会混进工资
+        let visible = monthExpenses.visible(unlocked: false).expensesOnly   // ← 隐私红线，别改
         // 摘要里存的是**显示名**（小组件那边没有库、翻译不了代号）。
         // 所以分类改名之后，小组件上的名字要等这里下一次推送才会跟着变 —— 而任何一次
         // 记账 / 改分类都会触发推送，所以最多差一次操作，不会长期不一致
         let byCategory = Dictionary(grouping: visible, by: \.categoryRaw)
-            .map { ExpenseSummary.Slice(name: catalog.name(forKey: $0.key), amount: $0.value.amountSum) }
+            .map { ExpenseSummary.Slice(name: catalog.name(forKey: $0.key), amount: $0.value.expenseSum) }
             .sorted { $0.amount > $1.amount }
 
         // 用 app 自己那个 monthTitle，跟明细页顶部卡片显示的是同一个字符串
         // —— 各写各的格式化器迟早分叉（一个「2026年8月」一个「2026年08月」）
         let summary = ExpenseSummary(
             monthLabel: Date.now.startOfMonth.monthTitle,
-            total: visible.amountSum,
+            total: visible.expenseSum,
             count: visible.count,
             top: Array(byCategory.prefix(3)),
             updatedAt: .now)

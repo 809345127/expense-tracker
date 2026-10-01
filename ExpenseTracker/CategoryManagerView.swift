@@ -47,7 +47,8 @@ struct CategoryManagerView: View {
     @Query private var allExpenses: [Expense]
 
     @State private var editingTarget: CategoryDef?
-    @State private var creating = false
+    /// 正在新建的是哪一种：nil = 没在建；false = 支出分类；true = 收入分类
+    @State private var creatingIncome: Bool?
     @State private var blockedMessage: String?
 
     /// 每个分类被多少笔账用着（含私密）。
@@ -67,15 +68,9 @@ struct CategoryManagerView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    ForEach(categories) { c in
-                        row(c)
-                    }
-                    .onMove(perform: move)
-                    .onDelete(perform: deleteAt)
-                } footer: {
-                    Text("长按拖动可以调整顺序，顺序决定记一笔时九宫格的排列。\n左滑删除；已经有账目在用的分类删不掉，先把那些账改到别的分类。")
-                }
+                // 支出、收入分两组，各排各的顺序（记一笔时也是分开显示的）
+                section(income: false)
+                section(income: true)
             }
             .navigationTitle("分类")
             .navigationBarTitleDisplayMode(.inline)
@@ -84,8 +79,10 @@ struct CategoryManagerView: View {
                     Button("完成") { dismiss() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        creating = true
+                    // 分类建好之后不能在支出和收入之间换（见 CategoryKind），所以建之前就要选
+                    Menu {
+                        Button("支出分类") { creatingIncome = false }
+                        Button("收入分类") { creatingIncome = true }
                     } label: {
                         Image(systemName: "plus")
                     }
@@ -108,7 +105,10 @@ struct CategoryManagerView: View {
             }
             #endif
             .sheet(item: $editingTarget) { CategoryEditorView(editing: $0) }
-            .sheet(isPresented: $creating) { CategoryEditorView(editing: nil) }
+            .sheet(isPresented: Binding(
+                get: { creatingIncome != nil },
+                set: { if !$0 { creatingIncome = nil } }
+            )) { CategoryEditorView(editing: nil, income: creatingIncome ?? false) }
             .alert("删不掉", isPresented: Binding(
                 get: { blockedMessage != nil },
                 set: { if !$0 { blockedMessage = nil } }
@@ -116,6 +116,26 @@ struct CategoryManagerView: View {
                 Button("知道了", role: .cancel) {}
             } message: {
                 Text(blockedMessage ?? "")
+            }
+        }
+    }
+
+    private func list(income: Bool) -> [CategoryDef] {
+        categories.filter { $0.isIncome == income }
+    }
+
+    private func section(income: Bool) -> some View {
+        Section {
+            ForEach(list(income: income)) { c in
+                row(c)
+            }
+            .onMove { move(income: income, from: $0, to: $1) }
+            .onDelete { deleteAt(income: income, $0) }
+        } header: {
+            Text(income ? "收入" : "支出")
+        } footer: {
+            if income {
+                Text("长按拖动可以调整顺序，顺序决定记一笔时九宫格的排列。\n左滑删除；已经有账目在用的分类删不掉，先把那些账改到别的分类。")
             }
         }
     }
@@ -151,22 +171,24 @@ struct CategoryManagerView: View {
 
     // MARK: 排序
 
-    private func move(from source: IndexSet, to destination: Int) {
-        var reordered = categories
+    private func move(income: Bool, from source: IndexSet, to destination: Int) {
+        var reordered = list(income: income)
         reordered.move(fromOffsets: source, toOffset: destination)
+        let base = income ? CategorySeed.incomeSortBase : 0
         // 重排之后整体重新编号。不做「只改动过的那几个」那种小聪明 ——
         // 十来条数据，全量重写最不容易出错
         // ⚠️ 每条都要 touch：排序也是要同步出去的改动（安卓那边的顺序要跟着变）
-        for (i, c) in reordered.enumerated() { c.sortOrder = i; c.touch() }
+        for (i, c) in reordered.enumerated() { c.sortOrder = base + i; c.touch() }
         try? context.save()
         SyncEngine.shared.syncSoon(context.container)
     }
 
     // MARK: 删除
 
-    private func deleteAt(_ offsets: IndexSet) {
+    private func deleteAt(income: Bool, _ offsets: IndexSet) {
+        let rows = list(income: income)
         for i in offsets {
-            let c = categories[i]
+            let c = rows[i]
             if let reason = whyCannotDelete(c) {
                 blockedMessage = reason
                 continue
@@ -207,12 +229,15 @@ struct CategoryEditorView: View {
     private var categories: [CategoryDef] { categoriesRaw.alive }
 
     private let editing: CategoryDef?
+    /// 建的是不是收入分类。编辑已有分类时跟着它自己走（代号前缀定死了，改不了）
+    private let income: Bool
     @State private var name: String
     @State private var iconName: String
     @State private var colorIndex: Int
 
-    init(editing: CategoryDef?) {
+    init(editing: CategoryDef?, income: Bool = false) {
         self.editing = editing
+        self.income = editing?.isIncome ?? income
         _name = State(initialValue: editing?.name ?? "")
         _iconName = State(initialValue: editing?.iconName ?? "questionmark.circle.fill")
         _colorIndex = State(initialValue: editing?.colorIndex ?? 0)
@@ -224,8 +249,10 @@ struct CategoryEditorView: View {
     private var duplicate: Bool {
         let key = CategoryDef.comparisonKey(cleanedName)
         guard !key.isEmpty else { return false }
+        // 只跟同一种比：支出有「其他」、收入也可以有一个叫「其他」的，代号不会撞（见 CategoryKind）
         return categories.contains {
-            $0.persistentModelID != editing?.persistentModelID && $0.comparisonKey == key
+            $0.isIncome == income
+                && $0.persistentModelID != editing?.persistentModelID && $0.comparisonKey == key
         }
     }
 
@@ -275,7 +302,7 @@ struct CategoryEditorView: View {
                     }
                 }
             }
-            .navigationTitle(editing == nil ? "新建分类" : "编辑分类")
+            .navigationTitle(editing == nil ? (income ? "新建收入分类" : "新建支出分类") : "编辑分类")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -339,7 +366,9 @@ struct CategoryEditorView: View {
                 name: cleanedName,
                 iconName: iconName,
                 colorIndex: colorIndex,
-                sortOrder: (categories.map(\.sortOrder).max() ?? -1) + 1
+                // 排在同一种的最后面。⚠️ 收入那一段从 incomeSortBase 起跳，不能跟支出混着编号
+                sortOrder: (categories.filter { $0.isIncome == income }.map(\.sortOrder).max()
+                            ?? (income ? CategorySeed.incomeSortBase - 1 : -1)) + 1
             ))
         }
         try? context.save()
@@ -354,10 +383,17 @@ struct CategoryEditorView: View {
     /// 老「coffee」的代号仍可能撞上（老账目还在用那个代号）。所以撞了就加后缀。
     private func newKey() -> String {
         let taken = Set(categories.map(\.key))
-        var candidate = cleanedName
+        // 收入分类的代号带「收入:」前缀 —— 它就是「这是收入分类」的唯一标记，见 CategoryKind
+        var base = (income ? CategoryKind.incomePrefix : "") + cleanedName
+        // 反过来也要防：支出分类恰好起名叫「收入:xx」的话，代号会被当成收入分类。
+        // 把半角冒号换成全角，显示名照旧（显示名不参与判断）
+        if !income && CategoryKind.isIncome(key: base) {
+            base = base.replacingOccurrences(of: ":", with: "：")
+        }
+        var candidate = base
         var n = 2
         while taken.contains(candidate) {
-            candidate = "\(cleanedName)-\(n)"
+            candidate = "\(base)-\(n)"
             n += 1
         }
         return candidate

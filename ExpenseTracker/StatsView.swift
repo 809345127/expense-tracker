@@ -15,6 +15,7 @@ struct StatsScreen: View {
         NavigationStack {
             StatsContent(month: $month, onDrillDown: onDrillDown)
                 .navigationTitle("统计")
+                .modifier(RootBottomToolbar())
         }
     }
 }
@@ -63,15 +64,33 @@ private struct StatsContent: View {
     /// ⚠️ 这一页往下的每一个数字都必须走这里，不能直接用 allExpenses。
     /// 三个瓦片、圆环、分类排行、按标签排行，漏掉任何一个，
     /// 那个数就会把私密记录的金额算进去、跟明细页对不上（见 PrivacyGate 的注释）。
-    private var expenses: [Expense] { allExpenses.visible(unlocked: gate.isUnlocked) }
+    private var visibleAll: [Expense] { allExpenses.visible(unlocked: gate.isUnlocked) }
 
-    private var total: Decimal { expenses.reduce(.zero) { $0 + $1.amount } }
+    /// 「支出 | 收入」切换（2026-10-01 加收入时加的）。两种钱不能混在一张圆环里：
+    /// 工资占比 95% 的话，所有支出分类都会被挤成一条细缝
+    enum Kind: String, CaseIterable { case expense = "支出", income = "收入" }
+    @State private var kind: Kind = .expense
+
+    /// 这个月有没有收入。没有就**不显示切换**（大部分月份只有支出，摆个切换是噪音）
+    private var hasIncome: Bool { visibleAll.contains { $0.isIncome } }
+
+    /// 实际生效的那一种。⚠️ 切到「收入」之后翻到一个没有收入的月份，切换会消失 ——
+    /// 这时得自动退回「支出」，不然整页是空的、又没有地方切回来
+    private var effectiveKind: Kind { hasIncome ? kind : .expense }
+
+    /// 这一页往下所有数字用的记录：过了私密门、再按「支出 | 收入」挑出一种
+    private var expenses: [Expense] {
+        effectiveKind == .income ? visibleAll.incomesOnly : visibleAll.expensesOnly
+    }
+
+    /// ⚠️ 一律用 magnitude 求和：收入的 amount 是负数
+    private var total: Decimal { expenses.reduce(.zero) { $0 + $1.magnitude } }
 
     private var stats: [CategoryStat] {
         let grouped = Dictionary(grouping: expenses) { $0.categoryRaw }
         let totalD = total.asDouble
         return grouped.map { key, items in
-            let sum = items.reduce(Decimal.zero) { $0 + $1.amount }
+            let sum = items.reduce(Decimal.zero) { $0 + $1.magnitude }
             let def = catalog.def(forKey: key)
             return CategoryStat(
                 key: key,
@@ -102,13 +121,13 @@ private struct StatsContent: View {
 
         for expense in expenses {
             if expense.tags.isEmpty {
-                untaggedTotal += expense.amount
+                untaggedTotal += expense.magnitude
                 untaggedCount += 1
                 continue
             }
             for tag in expense.tags {
                 var row = sums[tag.name] ?? (tag, .zero, 0)
-                row.total += expense.amount
+                row.total += expense.magnitude
                 row.count += 1
                 sums[tag.name] = row
             }
@@ -145,11 +164,19 @@ private struct StatsContent: View {
                 }
                     .padding(.top, 4)
 
+                if hasIncome {
+                    Picker("收支", selection: $kind) {
+                        ForEach(Kind.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 220)
+                }
+
                 if expenses.isEmpty {
                     ContentUnavailableView(
                         "这个月还没有记录",
                         systemImage: "chart.pie",
-                        description: Text("去「明细」页记几笔，这里就有图看了")
+                        description: Text("点右下角 + 记几笔，这里就有图看了")
                     )
                     .padding(.top, 60)
                 } else {
@@ -170,7 +197,7 @@ private struct StatsContent: View {
     // 三个数字瓦片
     private var tiles: some View {
         HStack(spacing: 10) {
-            tile("总支出", total.yuan)
+            tile("总\(effectiveKind.rawValue)", total.yuan)
             tile("笔数", "\(expenses.count)")
             tile("日均", dailyAverage.yuan)
         }
@@ -206,7 +233,7 @@ private struct StatsContent: View {
             }
             .chartLegend(.hidden)
             VStack(spacing: 4) {
-                Text("总支出")
+                Text("总\(effectiveKind.rawValue)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text(total.yuan)
@@ -275,7 +302,7 @@ private struct StatsContent: View {
             }
 
             // 这句话不能省：不写清楚重叠，这几行加起来超过总支出会让人以为算错了
-            Text("一笔可以打多个标签，所以上面各行之间会重叠、加起来会超过本月总支出。「未打标签」那行不与其它行重叠。")
+            Text("一笔可以打多个标签，所以上面各行之间会重叠、加起来会超过本月总\(effectiveKind.rawValue)。「未打标签」那行不与其它行重叠。")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .padding(.top, 4)

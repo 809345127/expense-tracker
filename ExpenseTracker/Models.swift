@@ -6,7 +6,12 @@ import SwiftUI
 
 @Model
 final class Expense {
-    var amount: Decimal        // 金额。用 Decimal 避免浮点误差
+    /// 金额。用 Decimal 避免浮点误差。
+    /// **正数 = 支出，负数 = 收入**（2026-10-01 加收入时定的，两端 + 协议一致，见 server/README.md）。
+    /// ⚠️ 界面上一律不直接显示它的正负号 —— 显示用 `magnitude` + `isIncome`；
+    ///    求和一律走下面的 `expenseSum` / `incomeSum`，**不许直接把 amount 加起来**：
+    ///    收入混进去会把「本月支出」抵掉一块，而且看着像少记了账。
+    var amount: Decimal
     var categoryRaw: String    // 分类存字符串，以后加分类不用迁移数据
     var note: String           // 备注，可为空
     var date: Date             // 记账时间：这笔钱花出去的时刻，带时分秒、可手动改。列表按它倒序，并按天分组
@@ -62,6 +67,12 @@ final class Expense {
     /// 不等于 createdAt。症状是**分类一条都没推上去**（账目和标签靠 syncID 空不空判，
     /// 所以它们是对的），另一台设备拉到账目却没有分类、列表全是灰问号。
     var needsPush: Bool = true
+
+    /// 是不是一笔收入（金额是负数）
+    var isIncome: Bool { amount < 0 }
+
+    /// 金额的绝对值，界面上显示用
+    var magnitude: Decimal { amount < 0 ? -amount : amount }
 
     init(amount: Decimal, categoryKey: String, note: String = "",
          date: Date = .now, isPrivate: Bool = false) {
@@ -292,7 +303,15 @@ extension Array where Element == Expense {
         }
     }
 
-    var amountSum: Decimal { reduce(.zero) { $0 + $1.amount } }
+    /// 支出合计：只加正数那些。⚠️ 别写回 `reduce { $0 + $1.amount }` —— 收入会把支出抵掉
+    var expenseSum: Decimal { reduce(.zero) { $1.isIncome ? $0 : $0 + $1.amount } }
+
+    /// 收入合计（正数）：只加负数那些、取绝对值
+    var incomeSum: Decimal { reduce(.zero) { $1.isIncome ? $0 + $1.magnitude : $0 } }
+
+    /// 只留支出 / 只留收入。统计页按「支出 | 收入」切换时用
+    var expensesOnly: [Expense] { filter { !$0.isIncome } }
+    var incomesOnly: [Expense] { filter { $0.isIncome } }
 
     /// 私密门锁着时把私密记录整个摘掉。**所有**用到记录的地方都要先过这一层
     /// ——列表、本月合计、笔数、统计页的每个数字，一个都不能漏。
@@ -325,14 +344,15 @@ extension Array where Element == Expense {
 
     /// 按天分组，天倒序；组内保持原顺序（也就是查询给的记账时间倒序）。
     /// 明细页和导出长图共用这一份 —— 分开写的话迟早分叉，图和界面对不上。
-    func groupedByDay() -> [(date: Date, items: [Expense], total: Decimal)] {
+    /// `total` 是当天**支出**合计，`income` 是当天收入合计（没有收入时是 0）
+    func groupedByDay() -> [(date: Date, items: [Expense], total: Decimal, income: Decimal)] {
         // Calendar.current 每次访问都会新建一个 Calendar 值，不是缓存的单例。
         // 提到闭包外面，几百笔就少几百次构造
         let cal = Calendar.current
         let grouped = Dictionary(grouping: self) { cal.startOfDay(for: $0.date) }
         return grouped.keys.sorted(by: >).map { day in
             let items = grouped[day]!
-            return (day, items, items.amountSum)
+            return (day, items, items.expenseSum, items.incomeSum)
         }
     }
 }
@@ -372,6 +392,9 @@ extension Decimal {
     var yuan: String {
         formatted(.currency(code: "CNY").locale(Locale(identifier: "zh_CN")))
     }
+
+    /// 收入的展示：+¥5,000.00。⚠️ 传进来的必须是**正数**（用 `Expense.magnitude` / `incomeSum`）
+    var incomeYuan: String { "+" + yuan }
 
     var asDouble: Double {
         NSDecimalNumber(decimal: self).doubleValue

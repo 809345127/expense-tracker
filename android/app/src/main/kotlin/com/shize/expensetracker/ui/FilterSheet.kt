@@ -87,27 +87,13 @@ fun FilterSheet(
 
             Spacer(Modifier.height(4.dp))
             SectionLabel("分类", "选多个 = 这几类都要看")
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                categories.forEach { c ->
-                    val n = catCount[c.id] ?: 0
-                    val on = c.id in filter.categoryKeys
-                    FilterChip(
-                        selected = on,
-                        onClick = { onFilterChange(filter.toggleCategory(c.id)) },
-                        label = { ChipLabel(c.name, n) },
-                        leadingIcon = {
-                            if (on) Icon(Icons.Filled.Check, null, Modifier.size(18.dp))
-                            else Icon(categoryIcon(c.iconName), null, Modifier.size(18.dp),
-                                      tint = categoryColor(c.colorIndex))
-                        },
-                        // 这个月一笔都没有的分类照样列出来（位置稳定、好找），但淡一点
-                        // 表示「点了也是空的」。iOS 那边同一个做法
-                        modifier = Modifier.alpha(if (n == 0 && !on) 0.45f else 1f),
-                    )
-                }
+            CategoryChips(categories.filter { !it.isIncome }, catCount, filter, onFilterChange)
+            // 收入分类单独一组（对位 iOS 筛选面板的「收入分类」）；一个都没有就不出现
+            val incomeCats = categories.filter { it.isIncome }
+            if (incomeCats.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                SectionLabel("收入分类", null)
+                CategoryChips(incomeCats, catCount, filter, onFilterChange)
             }
 
             Spacer(Modifier.height(8.dp))
@@ -167,11 +153,13 @@ fun FilterSheet(
 }
 
 @Composable
-private fun SectionLabel(title: String, hint: String) {
+private fun SectionLabel(title: String, hint: String?) {
     Column {
         Text(title, style = MaterialTheme.typography.titleSmall)
-        Text(hint, style = MaterialTheme.typography.bodySmall,
-             color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (hint != null) {
+            Text(hint, style = MaterialTheme.typography.bodySmall,
+                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         Spacer(Modifier.height(6.dp))
     }
 }
@@ -188,5 +176,37 @@ private fun ChipLabel(name: String, count: Int) {
             // 层级靠字号拉开，不靠涂淡
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CategoryChips(
+    cats: List<CategoryEntity>,
+    catCount: Map<String, Int>,
+    filter: ExpenseFilter,
+    onFilterChange: (ExpenseFilter) -> Unit,
+) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        cats.forEach { c ->
+            val n = catCount[c.id] ?: 0
+            val on = c.id in filter.categoryKeys
+            FilterChip(
+                selected = on,
+                onClick = { onFilterChange(filter.toggleCategory(c.id)) },
+                label = { ChipLabel(c.name, n) },
+                leadingIcon = {
+                    if (on) Icon(Icons.Filled.Check, null, Modifier.size(18.dp))
+                    else Icon(categoryIcon(c.iconName), null, Modifier.size(18.dp),
+                              tint = categoryColor(c.colorIndex))
+                },
+                // 这个月一笔都没有的分类照样列出来（位置稳定、好找），但淡一点
+                // 表示「点了也是空的」。iOS 那边同一个做法
+                modifier = Modifier.alpha(if (n == 0 && !on) 0.45f else 1f),
+            )
+        }
     }
 }

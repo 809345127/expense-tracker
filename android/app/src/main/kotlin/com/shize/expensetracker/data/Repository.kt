@@ -221,18 +221,25 @@ class Repository(
     /// 新建分类。
     /// ⚠️ 代号（id）取「建的这一刻的名字」，撞了就加 `-2` 后缀 —— 跟 iOS 那边**一模一样的算法**，
     /// 这样两台设备各自建同名分类会算出同一个代号、自动并成一条。改这里必须同时改 iOS。
-    suspend fun addCategory(name: String, iconName: String, colorIndex: Int): String {
+    suspend fun addCategory(name: String, iconName: String, colorIndex: Int, income: Boolean = false): String {
         // ⚠️ 必须走 cleanedName，不能只 trim：iOS 那边算代号用的就是它
         //（它还会把名字中间的连续空白压成一个空格）。两端算法差一点，
         // 同一个名字就会得到两个代号 → 同步之后变成两条一模一样的分类，而且不可逆
         val clean = cleanedName(name)
         val taken = categories.all().map { it.id }.toSet()
-        var key = clean
+        // 收入分类的代号带「收入:」前缀 —— 它就是「这是收入分类」的唯一标记（见 CategoryKind）。
+        // 反过来，支出分类恰好起名叫「收入:xx」时把半角冒号换成全角，免得被当成收入分类。
+        // ⚠️ 两条都跟 iOS CategoryEditorView.newKey() 一模一样
+        var base = (if (income) CategoryKind.INCOME_PREFIX else "") + clean
+        if (!income && CategoryKind.isIncome(base)) base = base.replace(":", "：")
+        var key = base
         var n = 2
-        while (key in taken) { key = "$clean-$n"; n++ }
+        while (key in taken) { key = "$base-$n"; n++ }
 
         val t = now()
-        val maxOrder = categories.all().maxOfOrNull { it.sortOrder } ?: -1
+        // 排在同一种的最后面。⚠️ 收入那一段从 INCOME_SORT_BASE 起跳
+        val maxOrder = categories.all().filter { it.isIncome == income }.maxOfOrNull { it.sortOrder }
+            ?: if (income) CategoryKind.INCOME_SORT_BASE - 1 else -1
         categories.upsert(
             CategoryEntity(id = key, name = clean, iconName = iconName, colorIndex = colorIndex,
                            sortOrder = maxOrder + 1, isFallback = false,
@@ -271,13 +278,33 @@ class Repository(
         return true
     }
 
-    /// 拖动排序。整批重编号、整批标 dirty
+    /// 拖动排序。整批重编号、整批标 dirty。
+    /// ⚠️ 传进来的只是**同一种**（支出或收入）的那一组；收入那段从 INCOME_SORT_BASE 起编号
     suspend fun reorderCategories(ordered: List<CategoryEntity>) {
         val t = now()
+        val base = if (ordered.firstOrNull()?.isIncome == true) CategoryKind.INCOME_SORT_BASE else 0
         categories.upsert(ordered.mapIndexed { i, c ->
-            c.copy(sortOrder = i, updatedAt = t, dirty = true)
+            c.copy(sortOrder = base + i, updatedAt = t, dirty = true)
         })
         syncSoon()
+    }
+
+    /// 种收入预设：库里**一个收入分类都没有**（含墓碑）时种全套 —— 也就是升到有收入功能的
+    /// 这个版本的第一次。之后不再种：「收入:其他」删不掉，所以条件不会再成立。
+    ///
+    /// ⚠️ updatedAt = 0（1970）、dirty = true，跟 iOS 种预设是同一条规矩（server/README.md
+    /// 「种默认数据时的一条硬规矩」）：服务器上已经有了（iOS 先种过）→ 合并时服务器那份赢、
+    /// 顺带清掉 dirty；服务器上没有 → 这一份被推上去。
+    /// ⚠️ 安卓不种支出预设（那 10 个从 iOS 同步过来），但收入要种：
+    /// 安卓先升级的话，不种就会出现「切到收入，九宫格是空的」
+    suspend fun seedIncomeCategories() {
+        if (categories.incomeCountRaw() > 0) return
+        categories.insertIfAbsent(CategoryKind.builtInIncome.mapIndexed { i, s ->
+            CategoryEntity(id = s.key, name = s.name, iconName = s.icon, colorIndex = s.color,
+                           sortOrder = CategoryKind.INCOME_SORT_BASE + i,
+                           isFallback = s.key == CategoryKind.INCOME_FALLBACK_KEY,
+                           createdAt = 0, updatedAt = 0, dirty = true)
+        })
     }
 
     /// 写完就催一次同步 + 刷一次桌面小组件。
@@ -303,7 +330,8 @@ class Repository(
         val from = month.atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
         val to = month.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
 
-        val items = expenses.range(from, to).visible(unlocked = false)
+        // ⚠️ 小组件只显示**支出**（「本月花了多少」）。收入摘掉，不然笔数和前三名里会混进工资
+        val items = expenses.range(from, to).visible(unlocked = false).filter { !it.isIncome }
         val byKey = categories.all().associateBy { it.id }
         val top = items.groupBy { it.categoryKey }
             .map { (k, v) ->

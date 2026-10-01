@@ -88,6 +88,9 @@ final class CategoryDef {
 
     var color: Color { CategoryPalette.color(at: colorIndex) }
 
+    /// 收入分类：代号带「收入:」前缀（见 `CategoryKind`）。建好就定了，跟 key 一样永不改
+    var isIncome: Bool { CategoryKind.isIncome(key: key) }
+
     // MARK: 名字的清理与查重
     //
     // 照抄 `Tag` 那一套，理由也一样：这个 app 被中文输入法坑过一次（全角句号让 12。75
@@ -109,6 +112,27 @@ final class CategoryDef {
     }
 
     var comparisonKey: String { CategoryDef.comparisonKey(name) }
+}
+
+// MARK: - 支出分类 / 收入分类（2026-10-01 加收入时加的）
+//
+// ## 为什么靠代号前缀区分，而不是加一个字段
+//
+// 收入分类的代号一律是「收入:」+ 名字（`收入:工资`），支出分类照旧（`餐饮`）。
+// 这样**同步协议一个字段都不用加、服务器一行都不用改**：分类的 id 就是代号，
+// 前缀跟着 id 走，两台设备天然看到同一个答案。
+//
+// 加字段的话有个坑：还没升级的那台设备不认识这个字段，它一改这个分类再推上去，
+// 字段就被它丢了 —— 收入分类悄悄变回支出分类，而且没有任何报错。
+//
+// 顺带的好处：收入、支出各有一个「其他」也不会撞代号（`其他` / `收入:其他`）。
+// 代价：一个分类建好之后不能在支出和收入之间改来改去 —— 跟代号永不改是同一条规矩。
+//
+// ⚠️ 安卓那边（`data/Entities.kt` 的 `CategoryKind`）用的是同一个前缀，**一个字都不能差**。
+enum CategoryKind {
+    static let incomePrefix = "收入:"
+
+    static func isIncome(key: String) -> Bool { key.hasPrefix(incomePrefix) }
 }
 
 // MARK: - 配色
@@ -158,6 +182,10 @@ enum CategoryIconLibrary {
         ("钱与其它", ["arrow.triangle.2.circlepath", "creditcard.fill", "banknote.fill",
                    "pawprint.fill", "phone.fill", "wifi", "ellipsis.circle.fill",
                    "questionmark.circle.fill"]),
+        // ⚠️ 每个图标在整张表里只能出现一次（界面上按图标名当 id）。
+        // 安卓要在 CategoryVisuals.kt 里给每个新图标配一个对应的图
+        ("收入", ["star.fill", "chart.line.uptrend.xyaxis", "envelope.fill",
+                 "arrow.uturn.backward.circle.fill", "briefcase.fill", "dollarsign.circle.fill"]),
     ]
 
     static let all: [String] = groups.flatMap(\.icons)
@@ -186,8 +214,26 @@ enum CategorySeed {
         ("其他", "其他", "ellipsis.circle.fill", 9),
     ]
 
+    /// 收入的预设分类。代号 = 「收入:」+ 名字（见 `CategoryKind`）。
+    /// ⚠️ 跟上面那份一样，**代号一个字都不能改**；安卓那边必须是同一份
+    static let builtInIncome: [(key: String, name: String, icon: String, color: Int)] = [
+        ("收入:工资", "工资", "banknote.fill", 10),
+        ("收入:奖金", "奖金", "star.fill", 12),
+        ("收入:理财", "理财", "chart.line.uptrend.xyaxis", 11),
+        ("收入:红包", "红包", "envelope.fill", 5),
+        ("收入:退款", "退款", "arrow.uturn.backward.circle.fill", 1),
+        ("收入:兼职", "兼职", "briefcase.fill", 6),
+        ("收入:其他", "其他收入", "ellipsis.circle.fill", 9),
+    ]
+
+    /// 收入分类的排序号从这里起跳，跟支出分类（从 0 起）分开两段，各排各的
+    static let incomeSortBase = 1000
+
     /// 兜底分类的代号。它永远存在、永远不给删
     static let fallbackKey = "其他"
+
+    /// 收入那边的兜底分类，规矩同上
+    static let incomeFallbackKey = "收入:其他"
 
     /// 把缺的预设补进库里。
     ///
@@ -199,8 +245,10 @@ enum CategorySeed {
         let existing = (try? context.fetch(FetchDescriptor<CategoryDef>())) ?? []
         guard existing.isEmpty else {
             ensureFallbackExists(context, existing: existing)
+            seedIncomeIfNeeded(context, existing: existing)
             return
         }
+        seedIncomeIfNeeded(context, existing: [])
         for (i, s) in builtIn.enumerated() {
             let c = CategoryDef(key: s.key, name: s.name, iconName: s.icon,
                                 colorIndex: s.color, sortOrder: i,
@@ -224,11 +272,29 @@ enum CategorySeed {
         try? context.save()
     }
 
+    /// 收入预设：库里**一个收入分类都没有**（含已删的墓碑）时种全套 —— 也就是从没有收入功能的
+    /// 版本升上来的那一次。之后就不再种：「收入:其他」删不掉，所以这个条件不会再成立，
+    /// 用户删掉的预设不会自己长回来。
+    ///
+    /// ⚠️ updatedAt 同样压到 1970（理由见上面 seedIfNeeded 那一大段）：
+    /// 两台设备各自升级、各自种一遍，代号一样、时间戳一样，同步时服务器那份赢、不会打架
+    private static func seedIncomeIfNeeded(_ context: ModelContext, existing: [CategoryDef]) {
+        guard !existing.contains(where: { $0.isIncome }) else { return }
+        for (i, s) in builtInIncome.enumerated() {
+            let c = CategoryDef(key: s.key, name: s.name, iconName: s.icon,
+                                colorIndex: s.color, sortOrder: incomeSortBase + i,
+                                isFallback: s.key == incomeFallbackKey)
+            c.updatedAt = Date(timeIntervalSince1970: 0)
+            context.insert(c)
+        }
+        try? context.save()
+    }
+
     /// 兜底分类必须一直在。正常情况下删不掉它，这里只是防御 —— 万一库被外部改坏了，
     /// 也不至于让「新建记录」没有分类可选。
     private static func ensureFallbackExists(_ context: ModelContext, existing: [CategoryDef]) {
         guard !existing.contains(where: { $0.key == fallbackKey }) else { return }
-        let maxOrder = existing.map(\.sortOrder).max() ?? 0
+        let maxOrder = existing.filter { !$0.isIncome }.map(\.sortOrder).max() ?? 0
         context.insert(CategoryDef(key: fallbackKey, name: "其他",
                                    iconName: "ellipsis.circle.fill", colorIndex: 9,
                                    sortOrder: maxOrder + 1, isFallback: true))
@@ -275,6 +341,10 @@ struct CategoryCatalog {
     func color(forKey key: String) -> Color { byKey[key]?.color ?? .gray }
 
     var fallback: CategoryDef? { byKey[CategorySeed.fallbackKey] ?? all.first }
+
+    /// 支出分类 / 收入分类，各自按 sortOrder 排好
+    var expenseCategories: [CategoryDef] { all.filter { !$0.isIncome } }
+    var incomeCategories: [CategoryDef] { all.filter { $0.isIncome } }
 }
 
 // MARK: environment

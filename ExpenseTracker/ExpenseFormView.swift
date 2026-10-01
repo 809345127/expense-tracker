@@ -7,7 +7,12 @@ struct ExpenseFormView: View {
     @Environment(\.modelContext) private var context
 
     private let editing: Expense?
-    @State private var amountText: String
+    /// 金额算式（自定义键盘输进来的，可以带加减乘除）。**只有正数**，正负由下面的 isIncome 决定
+    @State private var expr: AmountExpression
+    /// 这笔是收入还是支出。存的时候收入记成负数（见 Expense.amount）
+    @State private var isIncome: Bool
+    /// 自定义键盘露没露出来。新建时一进来就露；编辑旧账时先收着，点金额那一行才出来
+    @State private var keypadShown: Bool
     /// 选中的分类**代号**。存代号不存对象，理由同 ExpenseFilter：
     /// 托管对象放进 @State 在弹层来回时容易踩生命周期问题
     @State private var categoryKey: String
@@ -18,7 +23,8 @@ struct ExpenseFormView: View {
     @State private var selectedTagIDs: Set<PersistentIdentifier>
     @State private var showingTagPicker = false
     @State private var isPrivate: Bool
-    @FocusState private var amountFocused: Bool
+    /// 备注框拿到焦点时（系统键盘升起来）要把自定义键盘收掉，两个键盘不能叠着
+    @FocusState private var noteFocused: Bool
     @Environment(PrivacyGate.self) private var gate
 
     @Query(sort: [SortDescriptor(\Tag.sortOrder), SortDescriptor(\Tag.createdAt)])
@@ -40,8 +46,10 @@ struct ExpenseFormView: View {
 
     init(expense: Expense? = nil) {
         editing = expense
-        // Decimal 的字符串形式就是 "28.5" 这类纯数字，直接可编辑
-        _amountText = State(initialValue: expense.map { "\($0.amount)" } ?? "")
+        // 编辑时从金额的绝对值开始（收入存的是负数，界面上不显示负号）
+        _expr = State(initialValue: expense.map { AmountExpression(amount: $0.magnitude) } ?? AmountExpression())
+        _isIncome = State(initialValue: expense?.isIncome ?? false)
+        _keypadShown = State(initialValue: expense == nil)
         // 新建时先留空，等 onAppear 拿到库里的分类列表再落到第一个上
         // —— init 里读不到 @Query，而分类现在是库里的数据、不是写死的枚举
         _categoryKey = State(initialValue: expense?.categoryRaw ?? "")
@@ -65,9 +73,17 @@ struct ExpenseFormView: View {
     /// 数据来自 `@Query`，它有值的那一帧结果就是对的。
     ///
     /// 顺带把「编辑一笔、而它的分类已经被删掉」这种情况也兜住了：找不到就退到第一个。
+    ///
+    /// 2026-10-01 起还要跟着「支出 / 收入」走：切到收入时，原来选的「餐饮」不在这一组里，
+    /// 就落到收入的第一个上；切回支出，原来那个「餐饮」又回来了（state 里一直记着它）。
     private var effectiveCategoryKey: String {
-        if allCategories.contains(where: { $0.key == categoryKey }) { return categoryKey }
-        return allCategories.first?.key ?? ""
+        if shownCategories.contains(where: { $0.key == categoryKey }) { return categoryKey }
+        return shownCategories.first?.key ?? ""
+    }
+
+    /// 九宫格里显示的分类：只显示当前这一种（支出 / 收入）的
+    private var shownCategories: [CategoryDef] {
+        allCategories.filter { $0.isIncome == isIncome }
     }
 
     /// 当前选中的标签，按标签自身的排序显示
@@ -75,67 +91,29 @@ struct ExpenseFormView: View {
         allTags.filter { selectedTagIDs.contains($0.persistentModelID) }
     }
 
-    /// 输入合法时返回金额，否则 nil（保存按钮据此禁用）
-    ///
-    /// 必须严格校验：Decimal(string:) 会把 "12元"、"12。75" 这类脏输入
-    /// 截断成 12 而不报错，那样用户以为记了 12.75、实际记成 12，且毫无提示。
-    private var amount: Decimal? {
-        let t = amountText.trimmingCharacters(in: .whitespaces)
-        guard t.range(of: #"^\d{1,9}(\.\d{1,2})?$"#, options: .regularExpression) != nil,
-              let d = Decimal(string: t), d > 0 else { return nil }
-        return d
-    }
+    /// 算式算出来的金额（恒为正数）。算不出来或 ≤ 0 时是 nil，保存按钮据此禁用。
+    /// 规则全在 AmountExpression.value 里
+    private var amount: Decimal? { expr.value }
 
-    /// 净化金额输入：中文输入法的全角句号转成小数点，去掉数字以外的字符，
-    /// 并限制成「最多 9 位整数 + 最多 2 位小数、只有一个小数点」。
-    static func sanitizeAmount(_ raw: String) -> String {
-        var t = raw
-            .replacingOccurrences(of: "。", with: ".")
-            .replacingOccurrences(of: "．", with: ".")
-            .filter { $0.isASCII && ($0.isNumber || $0 == ".") }
-
-        // 只保留第一个小数点
-        if let dot = t.firstIndex(of: ".") {
-            let tail = t[t.index(after: dot)...].filter { $0 != "." }
-            t = t[..<dot] + "." + tail
-        }
-
-        var intPart = t, decPart: String?
-        if let dot = t.firstIndex(of: ".") {
-            intPart = String(t[..<dot])
-            decPart = String(t[t.index(after: dot)...].prefix(2))
-        }
-        if intPart.isEmpty && decPart != nil { intPart = "0" } // 直接从小数点开始输入时补 0
-        intPart = String(intPart.prefix(9))
-        return decPart.map { intPart + "." + $0 } ?? intPart
-    }
+    private var canSave: Bool { amount != nil && !effectiveCategoryKey.isEmpty }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    HStack(spacing: 8) {
-                        Text("¥")
-                            .font(.system(size: 28, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.secondary)
-                        TextField("0.00", text: $amountText)
-                            .keyboardType(.decimalPad)
-                            .font(.system(size: 34, weight: .bold, design: .rounded))
-                            .focused($amountFocused)
-                            .onChange(of: amountText) { _, new in
-                                let clean = Self.sanitizeAmount(new)
-                                if clean != new { amountText = clean }
-                            }
+                    // 收入不是靠输负号，是靠这个切换（键盘上的「−」只用来做减法，见 AmountExpression）
+                    Picker("收支", selection: $isIncome) {
+                        Text("支出").tag(false)
+                        Text("收入").tag(true)
                     }
-                    .padding(.vertical, 4)
-                    // 整行都能唤起键盘：只有数字那一小块可点的话，点右侧空白会像没反应
-                    .contentShape(Rectangle())
-                    .onTapGesture { amountFocused = true }
+                    .pickerStyle(.segmented)
+                    .listRowSeparator(.hidden)
+                    amountDisplay
                 }
 
                 Section {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 14) {
-                        ForEach(allCategories) { c in
+                        ForEach(shownCategories) { c in
                             categoryCell(c)
                         }
                     }
@@ -179,6 +157,7 @@ struct ExpenseFormView: View {
                         Text("备注")
                         TextField("可选", text: $note)
                             .multilineTextAlignment(.trailing)
+                            .focused($noteFocused)
                     }
                     tagRow
 
@@ -217,12 +196,24 @@ struct ExpenseFormView: View {
                         .fontWeight(.semibold)
                         // 分类为空也存不了：分类是必填的，而库里理论上不可能一个分类都没有
                         // （「其他」删不掉），这一条只是防御
-                        .disabled(amount == nil || effectiveCategoryKey.isEmpty)
+                        .disabled(!canSave)
                 }
+            }
+            // 自定义键盘贴在底部。用 safeAreaInset 不用 overlay：它会把表单的可视区撑小，
+            // 滚到最底下的「私密」「删除」那几行不会被键盘压住（overlay 会压上去，这项目踩过）
+            .safeAreaInset(edge: .bottom) {
+                if keypadShown && !noteFocused {
+                    AmountKeypad(onKey: { expr.press($0) }, canSave: canSave, onSave: save)
+                        .transition(.move(edge: .bottom))
+                }
+            }
+            .animation(.snappy(duration: 0.2), value: keypadShown && !noteFocused)
+            .onChange(of: noteFocused) { _, focused in
+                // 备注框聚焦 → 收起自定义键盘；之后要改金额，点一下金额那行就回来
+                if focused { keypadShown = false }
             }
             .onAppear {
                 if editing == nil {
-                    amountFocused = true
                     // 解锁状态下新建，默认就打上私密 —— 特意解锁进来多半就是为了记这一笔。
                     // 不想私密的话那一行就在眼前，拨回去即可。
                     isPrivate = gate.isUnlocked
@@ -236,6 +227,42 @@ struct ExpenseFormView: View {
                 CategoryManagerView()
             }
         }
+    }
+
+    /// 金额那一行：显示正在输的算式；带运算符时下面多一行「= 结果」。
+    /// 点它 → 收起系统键盘、露出自定义键盘
+    private var amountDisplay: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                Text("¥")
+                    .font(.system(size: 28, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                Text(expr.isEmpty ? "0.00" : expr.text)
+                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(expr.isEmpty ? AnyShapeStyle(.tertiary)
+                                     : isIncome ? AnyShapeStyle(Color.income) : AnyShapeStyle(.primary))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                Spacer(minLength: 0)
+            }
+            if expr.hasOperator {
+                Text(amount.map { "= \($0.yuan)" } ?? "算不出来")
+                    .font(.subheadline.weight(.medium))
+                    .monospacedDigit()
+                    .foregroundStyle(amount == nil ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
+            }
+        }
+        .padding(.vertical, 4)
+        // 整行都能点：只有数字那一小块可点的话，点右侧空白会像没反应
+        .contentShape(Rectangle())
+        .onTapGesture {
+            noteFocused = false
+            keypadShown = true
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("amountDisplay")
+        .accessibilityAddTraits(.isButton)
     }
 
     /// 「标签」那一行：点开是多选器，选中的直接显示成小胶囊
@@ -290,7 +317,9 @@ struct ExpenseFormView: View {
     }
 
     private func save() {
-        guard let amount else { return }
+        guard let magnitude = amount, !effectiveCategoryKey.isEmpty else { return }
+        // ⚠️ 收入存成负数（见 Expense.amount）。界面上从头到尾只有正数，符号只在这一处加
+        let amount = isIncome ? -magnitude : magnitude
         let trimmedNote = note.trimmingCharacters(in: .whitespaces)
         let tags = selectedTags
         if let editing {

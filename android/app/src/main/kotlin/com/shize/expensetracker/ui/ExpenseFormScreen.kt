@@ -9,7 +9,6 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -21,13 +20,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.activity.compose.BackHandler
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -63,14 +60,16 @@ class ExpenseFormViewModel(app: Application) : AndroidViewModel(app) {
         into(repo.tagIdsOf(expenseId).toSet())
     }
 
+    /// `magnitude` 是键盘算出来的正数；`income` 决定存成正数还是负数（见 ExpenseEntity.amount）
     fun save(
-        editing: ExpenseEntity?, amountText: String, categoryKey: String,
+        editing: ExpenseEntity?, magnitude: java.math.BigDecimal?, income: Boolean, categoryKey: String,
         note: String, isPrivate: Boolean, date: Long, tagIds: Set<String>,
         done: () -> Unit,
     ) = viewModelScope.launch {
-        // ⚠️ 金额一定要走 parseAmount：解析不出来就**不保存**，绝不写 0
-        //（把一笔账静默变成 0 元比保存失败恶劣得多，见 Money.kt 顶部）
-        val amount = parseAmount(amountText) ?: return@launch
+        // ⚠️ 算不出来就**不保存**，绝不写 0（把一笔账静默变成 0 元比保存失败恶劣得多）
+        val m = magnitude?.takeIf { it.signum() > 0 } ?: return@launch
+        // ⚠️ 收入存成负数。界面上从头到尾只有正数，符号只在这一处加
+        val amount = if (income) m.negate() else m
         if (categoryKey.isEmpty()) return@launch
         if (editing == null) {
             repo.addExpense(amount, categoryKey, note.trim(),
@@ -108,13 +107,18 @@ fun ExpenseFormScreen(
     val categories by vm.categories.collectAsStateWithLifecycle()
     val unlocked by vm.unlocked.collectAsStateWithLifecycle()
 
-    var amountText by remember {
-        mutableStateOf(editing?.amount?.toPlainString() ?: "")
-    }
+    // 金额算式（自定义键盘输进来的，可以带加减乘除）。**只有正数**，正负由 isIncome 决定。
+    // 编辑时从金额的绝对值开始（收入存的是负数，界面上不显示负号）
+    var expr by remember { mutableStateOf(editing?.let { AmountExpression.of(it.magnitude) } ?: AmountExpression()) }
+    var isIncome by remember { mutableStateOf(editing?.isIncome ?: false) }
+    // 自定义键盘露没露出来。新建时一进来就露；编辑旧账时先收着，点金额那一行才出来
+    var keypadShown by remember { mutableStateOf(editing == null) }
+    // 备注框拿到焦点（系统键盘升起来）时要把自定义键盘收掉，两个键盘不能叠着
+    var noteFocused by remember { mutableStateOf(false) }
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     var note by remember { mutableStateOf(editing?.note ?: "") }
     var chosenKey by remember { mutableStateOf(editing?.categoryKey ?: "") }
     var showCategories by remember { mutableStateOf(false) }
-    val amountFocus = remember { FocusRequester() }
 
     // 私密开关的值。null = 用户还没自己拨过。
     //
@@ -138,12 +142,18 @@ fun ExpenseFormScreen(
     /// ⚠️ 这是 iOS 那边踩出来的教训：分类是库里的数据，界面第一帧还没有，
     /// 在事后回调里补 state 会「时好时坏」（懒加载的行不一定重画）。
     /// 现算就没有先后顺序问题 —— 数据到了那一帧结果就是对的。
+    ///
+    /// 2026-10-01 起还要跟着「支出 / 收入」走：九宫格只显示当前这一种；切到收入时原来选的
+    /// 「餐饮」不在这组里，就落到收入的第一个上，切回支出它又回来（chosenKey 一直记着）
+    val shown = categories.filter { it.isIncome == isIncome }
     val effectiveKey = when {
-        categories.any { it.id == chosenKey } -> chosenKey
-        else -> categories.firstOrNull()?.id ?: ""
+        shown.any { it.id == chosenKey } -> chosenKey
+        else -> shown.firstOrNull()?.id ?: ""
     }
-    val canSave = parseAmount(amountText) != null && effectiveKey.isNotEmpty()
+    val amount = expr.value
+    val canSave = amount != null && effectiveKey.isNotEmpty()
     val isPrivate = privateChoice ?: unlocked
+    val save = { vm.save(editing, amount, isIncome, effectiveKey, note, isPrivate, date, tagIds, onClose) }
 
     Scaffold(
         topBar = {
@@ -163,52 +173,73 @@ fun ExpenseFormScreen(
                     // 这是这一页**唯一的主动作**，Material 的规矩是主动作要用填充按钮。
                     // 原来那个禁用态几乎看不见，用户不知道为什么按不了
                     Button(
-                        onClick = {
-                            vm.save(editing, amountText, effectiveKey, note, isPrivate,
-                                    date, tagIds, onClose)
-                        },
+                        onClick = { save() },
                         enabled = canSave,
                         modifier = Modifier.padding(end = 8.dp),
                     ) { Text("保存") }
                 },
             )
-        }
+        },
+        // 自定义键盘贴在底部。放 bottomBar 而不是叠在内容上：Scaffold 会把内容区让出来，
+        // 滚到最底下的备注、私密那几行不会被键盘压住
+        bottomBar = {
+            androidx.compose.animation.AnimatedVisibility(
+                visible = keypadShown && !noteFocused,
+                enter = androidx.compose.animation.slideInVertically { it },
+                exit = androidx.compose.animation.slideOutVertically { it },
+            ) {
+                AmountKeypad(onKey = { expr = expr.press(it) }, canSave = canSave, onSave = { save() })
+            }
+        },
     ) { padding ->
         Column(
             Modifier.padding(padding).verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
-            // ---- 金额 ----
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("¥", fontSize = 28.sp, fontWeight = FontWeight.SemiBold,
-                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.width(8.dp))
-                TextField(
-                    value = amountText,
-                    onValueChange = {
-                        // ⚠️⚠️ 每次输入都净化。中文输入法的全角句号「。」如果漏过去，
-                        // 12。75 会被解析歪 —— iOS 那边就是这么把一笔账静默记成 12 块的。
-                        // 详见 Money.kt 顶部
-                        amountText = sanitizeAmount(it)
-                    },
-                    placeholder = { Text("0.00", fontSize = 30.sp) },
-                    textStyle = MaterialTheme.typography.displaySmall.copy(
-                        fontWeight = FontWeight.Bold),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                    ),
-                    modifier = Modifier.weight(1f).focusRequester(amountFocus),
-                )
+            // ---- 支出 / 收入 ----
+            // 收入不是靠输负号，是靠这个切换（键盘上的「−」只用来做减法，见 AmountExpression）
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                listOf(false to "支出", true to "收入").forEachIndexed { i, (v, label) ->
+                    SegmentedButton(
+                        selected = isIncome == v, onClick = { isIncome = v },
+                        shape = SegmentedButtonDefaults.itemShape(i, 2),
+                    ) { Text(label) }
+                }
             }
 
-            // 新建时光标直接落在金额上、键盘自动弹出来 —— 记一笔的第一件事就是输金额，
-            // 少一次点击。⚠️ 编辑已有记录时**不要**抢焦点：那时用户多半是来改分类或备注的，
-            // 键盘弹出来反而挡住下半屏。（对位 iOS 的 `amountFocused = true`，它也只在新建时设。）
-            LaunchedEffect(Unit) { if (editing == null) amountFocus.requestFocus() }
+            // ---- 金额 ----
+            // 显示正在输的算式；带运算符时下面多一行「= 结果」。
+            // 点它 → 收起系统键盘、露出自定义键盘
+            Column(
+                Modifier.fillMaxWidth()
+                    .clickable { focusManager.clearFocus(); keypadShown = true }
+                    .padding(vertical = 4.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("¥", fontSize = 28.sp, fontWeight = FontWeight.SemiBold,
+                         color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (expr.isEmpty) "0.00" else expr.text,
+                        style = MaterialTheme.typography.displaySmall.copy(fontWeight = FontWeight.Bold),
+                        color = when {
+                            expr.isEmpty -> MaterialTheme.colorScheme.outline
+                            isIncome -> incomeColor()
+                            else -> MaterialTheme.colorScheme.onSurface
+                        },
+                        maxLines = 1,
+                    )
+                }
+                if (expr.hasOperator) {
+                    Text(
+                        amount?.let { "= ${formatYuan(it)}" } ?: "算不出来",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = if (amount == null) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
 
             // ---- 分类九宫格 ----
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -224,7 +255,7 @@ fun ExpenseFormScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(categories, key = { it.id }) { c ->
+                items(shown, key = { it.id }) { c ->
                     CategoryCell(c, selected = c.id == effectiveKey) { chosenKey = c.id }
                 }
             }
@@ -258,7 +289,12 @@ fun ExpenseFormScreen(
             OutlinedTextField(
                 value = note, onValueChange = { note = it },
                 label = { Text("备注（可选）") },
-                singleLine = true, modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().onFocusChanged {
+                    noteFocused = it.isFocused
+                    // 备注框聚焦 → 收起自定义键盘；之后要改金额，点一下金额那行就回来
+                    if (it.isFocused) keypadShown = false
+                },
             )
 
             // ---- 私密 ----

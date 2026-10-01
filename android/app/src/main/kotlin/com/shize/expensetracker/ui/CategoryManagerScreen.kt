@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -93,9 +94,9 @@ class CategoryManagerViewModel(app: Application) : AndroidViewModel(app) {
         repo.reorderCategories(ordered)
     }
 
-    fun save(editing: CategoryEntity?, name: String, iconName: String, colorIndex: Int) =
+    fun save(editing: CategoryEntity?, name: String, iconName: String, colorIndex: Int, income: Boolean) =
         viewModelScope.launch {
-            if (editing == null) repo.addCategory(name, iconName, colorIndex)
+            if (editing == null) repo.addCategory(name, iconName, colorIndex, income)
             else repo.updateCategory(editing, name, iconName, colorIndex)
         }
 
@@ -119,6 +120,10 @@ fun CategoryManagerScreen(onBack: () -> Unit, vm: CategoryManagerViewModel = vie
 
     // null = 不在编辑；Some(null) = 新建；Some(c) = 编辑 c
     var editing by remember { mutableStateOf<Optional<CategoryEntity>?>(null) }
+    // 现在看的是支出分类还是收入分类。新建时建的就是这一种 ——
+    // 分类建好之后不能在支出和收入之间换（代号前缀定死了，见 CategoryKind）
+    var incomeTab by rememberSaveable { mutableStateOf(false) }
+    val shown = categories.filter { it.isIncome == incomeTab }
 
     val target = editing
     if (target != null) {
@@ -128,6 +133,7 @@ fun CategoryManagerScreen(onBack: () -> Unit, vm: CategoryManagerViewModel = vie
         BackHandler { editing = null }
         CategoryEditorScreen(
             editing = target.value,
+            income = target.value?.isIncome ?: incomeTab,
             allCategories = categories,
             usageAll = usageAll,
             usageVisible = usageVisible,
@@ -155,6 +161,15 @@ fun CategoryManagerScreen(onBack: () -> Unit, vm: CategoryManagerViewModel = vie
         }
     ) { padding ->
         Column(Modifier.padding(padding)) {
+            // 支出、收入分开两组，各排各的顺序（记一笔时也是分开显示的）
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                listOf(false to "支出", true to "收入").forEachIndexed { i, (v, label) ->
+                    SegmentedButton(
+                        selected = incomeTab == v, onClick = { incomeTab = v },
+                        shape = SegmentedButtonDefaults.itemShape(i, 2),
+                    ) { Text(label) }
+                }
+            }
             Text(
                 "长按右边的把手拖动可以调整顺序，顺序决定「记一笔」时格子的排列。\n" +
                         "点进去可以改名字、图标、颜色，也能删 —— 已经有账目在用的分类删不掉，" +
@@ -163,12 +178,15 @@ fun CategoryManagerScreen(onBack: () -> Unit, vm: CategoryManagerViewModel = vie
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
+            // ⚠️ key 跟着 incomeTab：两组共用一个拖动列表组件，切组时要把它的拖动状态整个丢掉
+            androidx.compose.runtime.key(incomeTab) {
             DraggableCategoryList(
-                categories = categories,
+                categories = shown,
                 usageVisible = usageVisible,
                 onClick = { editing = Optional(it) },
                 onReorder = vm::reorder,
             )
+            }
         }
     }
 }
@@ -321,6 +339,8 @@ private fun usageText(c: CategoryEntity, visibleCount: Int): String = when {
 @Composable
 private fun CategoryEditorScreen(
     editing: CategoryEntity?,
+    /// 是不是收入分类。编辑时跟着它自己走；新建时是列表页当前那一组
+    income: Boolean,
     allCategories: List<CategoryEntity>,
     usageAll: Map<String, Int>,
     usageVisible: Map<String, Int>,
@@ -339,8 +359,9 @@ private fun CategoryEditorScreen(
     /// 重名判断：忽略大小写、全角半角、变音符号（同 iOS）。改自己的名字时把自己排除掉
     val duplicate = remember(cleaned, allCategories, editing) {
         val key = comparisonKey(cleaned)
+        // 只跟同一种比：支出有「其他」，收入也可以有一个叫「其他」的，代号不会撞（见 CategoryKind）
         key.isNotEmpty() && allCategories.any {
-            it.id != editing?.id && comparisonKey(it.name) == key
+            it.isIncome == income && it.id != editing?.id && comparisonKey(it.name) == key
         }
     }
     val canSave = cleaned.isNotEmpty() && !duplicate
@@ -348,7 +369,7 @@ private fun CategoryEditorScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (editing == null) "新建分类" else "编辑分类") },
+                title = { Text(if (editing == null) (if (income) "新建收入分类" else "新建支出分类") else "编辑分类") },
                 navigationIcon = {
                     IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "取消") }
                 },
@@ -363,7 +384,7 @@ private fun CategoryEditorScreen(
                         }
                     }
                     TextButton(
-                        onClick = { vm.save(editing, name, iconName, colorIndex); onClose() },
+                        onClick = { vm.save(editing, name, iconName, colorIndex, income); onClose() },
                         enabled = canSave,
                     ) { Text("保存") }
                 },
