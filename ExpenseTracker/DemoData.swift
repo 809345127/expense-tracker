@@ -25,6 +25,8 @@ import SwiftData
 /// | `-scrollBottom 1` | 明细页启动后自动滚到最后一行——查底部布局有没有被下面那条「记一笔」压住 |
 /// | `-deepLink expensetracker://add` | 走跟「点中号小组件右上角那颗 `+`」完全同一段处理逻辑 → 弹「记一笔」。⚠️ 别用 `simctl openurl` 测：那算「从别的 app 打开」，iOS 会先弹确认框，URL 根本到不了 app |
 /// | `-deepLink expensetracker://home` | 走跟「点中号小组件除了 `+` 以外任何地方」同一段逻辑 → 明细页、不弹任何东西。跟上一条**成对**验：只验 add 的话，「点本体不该弹」这半边等于没验 |
+/// | `-openSheet smart` | 弹出「智能记账」。配 `-smartText "午饭 32"` 预填文字、`-smartImage /路径.jpg` 预放一张图 |
+/// | `-deepseekBase http://127.0.0.1:端口` | DeepSeek 请求改发到本机假服务器（测降级用）。只有 DEBUG 构建认 |
 /// | `-imgScale 1.5` | 强行指定导出长图的清晰度。用来复现 / 二分「一张位图最高 8192 像素」这个坑，见 Export.swift 的注释 |
 enum DevFlags {
     static func has(_ name: String) -> Bool {

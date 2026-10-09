@@ -36,6 +36,7 @@ import com.shize.expensetracker.App
 import com.shize.expensetracker.hasDeviceLock
 import com.shize.expensetracker.data.CategoryEntity
 import com.shize.expensetracker.data.ExpenseEntity
+import com.shize.expensetracker.smart.ParsedDraft
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -102,6 +103,9 @@ class ExpenseFormViewModel(app: Application) : AndroidViewModel(app) {
 fun ExpenseFormScreen(
     editing: ExpenseEntity?,
     onClose: () -> Unit,
+    /// 智能记账的核对列表里点开某一笔时用：改完**不写库**，交回给核对列表（见 SmartEntryScreen）
+    draft: ParsedDraft? = null,
+    onDraftDone: ((ParsedDraft) -> Unit)? = null,
     vm: ExpenseFormViewModel = viewModel(),
 ) {
     val categories by vm.categories.collectAsStateWithLifecycle()
@@ -109,15 +113,20 @@ fun ExpenseFormScreen(
 
     // 金额算式（自定义键盘输进来的，可以带加减乘除）。**只有正数**，正负由 isIncome 决定。
     // 编辑时从金额的绝对值开始（收入存的是负数，界面上不显示负号）
-    var expr by remember { mutableStateOf(editing?.let { AmountExpression.of(it.magnitude) } ?: AmountExpression()) }
-    var isIncome by remember { mutableStateOf(editing?.isIncome ?: false) }
+    var expr by remember {
+        mutableStateOf(
+            editing?.let { AmountExpression.of(it.magnitude) }
+                ?: draft?.let { AmountExpression.of(it.amount) } ?: AmountExpression()
+        )
+    }
+    var isIncome by remember { mutableStateOf(editing?.isIncome ?: draft?.isIncome ?: false) }
     // 自定义键盘露没露出来。新建时一进来就露；编辑旧账时先收着，点金额那一行才出来
-    var keypadShown by remember { mutableStateOf(editing == null) }
+    var keypadShown by remember { mutableStateOf(editing == null && draft == null) }
     // 备注框拿到焦点（系统键盘升起来）时要把自定义键盘收掉，两个键盘不能叠着
     var noteFocused by remember { mutableStateOf(false) }
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
-    var note by remember { mutableStateOf(editing?.note ?: "") }
-    var chosenKey by remember { mutableStateOf(editing?.categoryKey ?: "") }
+    var note by remember { mutableStateOf(editing?.note ?: draft?.note ?: "") }
+    var chosenKey by remember { mutableStateOf(editing?.categoryKey ?: draft?.categoryKey ?: "") }
     var showCategories by remember { mutableStateOf(false) }
 
     // 私密开关的值。null = 用户还没自己拨过。
@@ -126,9 +135,9 @@ fun ExpenseFormScreen(
     // 这个项目记着「别指望先渲染、再在 onAppear 里补状态」那条教训。现算就没有先后顺序问题。
     // ⚠️ 为什么解锁态下新建要默认打私密：特意解锁进来多半就是为了记这一笔。
     // 不想私密的话那一行就在眼前，拨回去即可。（跟 iOS `isPrivate = gate.isUnlocked` 一致。）
-    var privateChoice by remember { mutableStateOf(editing?.isPrivate) }
-    var date by remember { mutableLongStateOf(editing?.date ?: System.currentTimeMillis()) }
-    var tagIds by remember { mutableStateOf(emptySet<String>()) }
+    var privateChoice by remember { mutableStateOf(editing?.isPrivate ?: draft?.isPrivate) }
+    var date by remember { mutableLongStateOf(editing?.date ?: draft?.date ?: System.currentTimeMillis()) }
+    var tagIds by remember { mutableStateOf(draft?.tagIds ?: emptySet()) }
     var confirmDelete by remember { mutableStateOf(false) }
     var showDate by remember { mutableStateOf(false) }
     var showTime by remember { mutableStateOf(false) }
@@ -153,12 +162,24 @@ fun ExpenseFormScreen(
     val amount = expr.value
     val canSave = amount != null && effectiveKey.isNotEmpty()
     val isPrivate = privateChoice ?: unlocked
-    val save = { vm.save(editing, amount, isIncome, effectiveKey, note, isPrivate, date, tagIds, onClose) }
+    val save = {
+        if (draft != null && onDraftDone != null) {
+            // 草稿：不写库，改好交回核对列表。人看过、改过了，就不再标黄
+            if (amount != null && effectiveKey.isNotEmpty()) {
+                onDraftDone(draft.copy(
+                    amount = amount, isIncome = isIncome, categoryKey = effectiveKey, date = date,
+                    note = note.trim(), tagIds = tagIds, isPrivate = isPrivate,
+                    uncertain = false, selected = true,
+                ))
+                onClose()
+            }
+        } else vm.save(editing, amount, isIncome, effectiveKey, note, isPrivate, date, tagIds, onClose)
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (editing == null) "记一笔" else "编辑") },
+                title = { Text(if (draft != null) "核对这一笔" else if (editing == null) "记一笔" else "编辑") },
                 navigationIcon = {
                     IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "取消") }
                 },

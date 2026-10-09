@@ -7,6 +7,9 @@ struct ExpenseFormView: View {
     @Environment(\.modelContext) private var context
 
     private let editing: Expense?
+    /// 智能记账的核对列表里点开某一笔时用：改完不写库，交回给核对列表（见 SmartEntryView）
+    private let draft: ParsedDraft?
+    private let onDraftDone: ((ParsedDraft) -> Void)?
     /// 金额算式（自定义键盘输进来的，可以带加减乘除）。**只有正数**，正负由下面的 isIncome 决定
     @State private var expr: AmountExpression
     /// 这笔是收入还是支出。存的时候收入记成负数（见 Expense.amount）
@@ -46,6 +49,8 @@ struct ExpenseFormView: View {
 
     init(expense: Expense? = nil) {
         editing = expense
+        draft = nil
+        onDraftDone = nil
         // 编辑时从金额的绝对值开始（收入存的是负数，界面上不显示负号）
         _expr = State(initialValue: expense.map { AmountExpression(amount: $0.magnitude) } ?? AmountExpression())
         _isIncome = State(initialValue: expense?.isIncome ?? false)
@@ -59,6 +64,21 @@ struct ExpenseFormView: View {
         // 编辑已有记录 → 沿用它自己的。新建 → 先按 false，onAppear 里再看门开没开
         // （init 里读不到 @Environment，只能等视图上屏）
         _isPrivate = State(initialValue: expense?.isPrivate ?? false)
+    }
+
+    /// 改一笔识别出来的草稿。表单长得跟记一笔一样，只是「保存」不写库、把改好的草稿交回去
+    init(draft d: ParsedDraft, onDone: @escaping (ParsedDraft) -> Void) {
+        editing = nil
+        draft = d
+        onDraftDone = onDone
+        _expr = State(initialValue: AmountExpression(amount: d.amount))
+        _isIncome = State(initialValue: d.isIncome)
+        _keypadShown = State(initialValue: false)
+        _categoryKey = State(initialValue: d.categoryKey)
+        _date = State(initialValue: d.date)
+        _note = State(initialValue: d.note)
+        _selectedTagIDs = State(initialValue: d.tagIDs)
+        _isPrivate = State(initialValue: d.isPrivate)
     }
 
     /// 实际生效的分类代号。
@@ -185,7 +205,7 @@ struct ExpenseFormView: View {
                     }
                 }
             }
-            .navigationTitle(editing == nil ? "记一笔" : "编辑")
+            .navigationTitle(draft != nil ? "核对这一笔" : editing == nil ? "记一笔" : "编辑")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -213,7 +233,7 @@ struct ExpenseFormView: View {
                 if focused { keypadShown = false }
             }
             .onAppear {
-                if editing == nil {
+                if editing == nil && draft == nil {
                     // 解锁状态下新建，默认就打上私密 —— 特意解锁进来多半就是为了记这一笔。
                     // 不想私密的话那一行就在眼前，拨回去即可。
                     isPrivate = gate.isUnlocked
@@ -322,6 +342,22 @@ struct ExpenseFormView: View {
         let amount = isIncome ? -magnitude : magnitude
         let trimmedNote = note.trimmingCharacters(in: .whitespaces)
         let tags = selectedTags
+        if let draft, let onDraftDone {
+            // 草稿：不写库，改好交回核对列表。人看过、改过了，就不再标黄
+            var d = draft
+            d.amount = magnitude
+            d.isIncome = isIncome
+            d.categoryKey = effectiveCategoryKey
+            d.date = date
+            d.note = trimmedNote
+            d.tagIDs = selectedTagIDs
+            d.isPrivate = isPrivate
+            d.uncertain = false
+            d.selected = true
+            onDraftDone(d)
+            dismiss()
+            return
+        }
         if let editing {
             editing.amount = amount
             editing.categoryRaw = effectiveCategoryKey

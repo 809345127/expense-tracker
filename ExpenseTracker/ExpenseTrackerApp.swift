@@ -176,6 +176,8 @@ struct RootView: View {
 
     /// 「记一笔」弹层。放在两页的共同父级：两页都能点「+」，不用先切回明细页
     @State private var showingAdd = false
+    /// 「智能记账」弹层（长按「+」进，见 SmartEntryView）
+    @State private var showingSmart = false
     #if DEBUG
     @State private var appliedDebugSheet = false
     @State private var appliedDebugLink = false
@@ -224,6 +226,7 @@ struct RootView: View {
         guard url.scheme == "expensetracker" else { return }
         switch url.host() {
         case "add":  showingAdd = true
+        case "smart": showingSmart = true
         case "home": showingAdd = false; tab = .list
         default:     break
         }
@@ -257,12 +260,14 @@ struct RootView: View {
                 .toolbar(.hidden, for: .tabBar)
                 .tag(Tab.stats)
         }
-        .environment(\.rootBottomBar, RootBottomBar(tab: $tab, add: { showingAdd = true }))
+        .environment(\.rootBottomBar, RootBottomBar(tab: $tab, add: { showingAdd = true },
+                                                     smart: { showingSmart = true }))
     }
 
     var body: some View {
         pages
         .sheet(isPresented: $showingAdd) { ExpenseFormView() }
+        .sheet(isPresented: $showingSmart) { SmartEntryView() }
         // 桌面小组件点一下：add → 弹「记一笔」，home → 明细页。见 handleDeepLink 上面那张表
         .onOpenURL { handleDeepLink($0) }
         #if DEBUG
@@ -285,6 +290,11 @@ struct RootView: View {
             ranTombstoneProbe = true
             TombstoneProbe.run(probeContext, unlocked: probeGate.isUnlocked, catalog: probeCatalog)
         }
+        // -smartSelfTest：智能记账的纯逻辑自测，结果在 Documents/smart-selftest.txt
+        .task {
+            guard DevFlags.has("-smartSelfTest") else { return }
+            SmartSelfTest.run(categories: probeCatalog.all.map { SmartCategory(key: $0.key, name: $0.name) })
+        }
         #endif
         #if DEBUG
         // -openSheet form / tags：截图时直接把「记一笔」摆出来。
@@ -295,6 +305,7 @@ struct RootView: View {
             appliedDebugSheet = true
             // categories 也要先把表单摆出来 —— 分类管理的入口就挂在表单的「分类」那一组标题上
             if ["form", "tags", "categories"].contains(DevFlags.value("-openSheet") ?? "") { showingAdd = true }
+            if DevFlags.value("-openSheet") == "smart" { showingSmart = true }
         }
         #endif
     }
@@ -307,6 +318,7 @@ struct RootView: View {
 struct RootBottomBar {
     var tab: Binding<RootView.Tab>
     var add: () -> Void
+    var smart: () -> Void
 }
 
 extension EnvironmentValues {
@@ -318,13 +330,31 @@ extension EnvironmentValues {
 struct RootBottomToolbar: ViewModifier {
     @Environment(\.rootBottomBar) private var bar
 
+    /// 左下角的「明细 | 统计」切换：只放图标的分段控件（2026-10-09 用户从三版里挑的）。
+    /// 比原来写字的版本更安静，跟右边那颗「+」一样是一个纯图标的玻璃控件。
+    /// 尺寸放大到跟「+」差不多高，单手好按（用户原话「可以适当大一点，好按」）。
+    /// ⚠️ 图标要带 accessibilityLabel，不然旁白只会念「图像」
     private func picker(_ bar: RootBottomBar) -> some View {
         Picker("页面", selection: bar.tab) {
-            Text("明细").tag(RootView.Tab.list)
-            Text("统计").tag(RootView.Tab.stats)
+            Image(systemName: "list.bullet").tag(RootView.Tab.list).accessibilityLabel("明细")
+            Image(systemName: "chart.pie.fill").tag(RootView.Tab.stats).accessibilityLabel("统计")
         }
         .pickerStyle(.segmented)
-        .fixedSize()
+        .controlSize(.extraLarge)
+        .frame(width: 150)
+    }
+
+    /// 右下角「+」：点一下 = 手动记一笔（跟原来一样），长按 = 弹出菜单选「智能记账」。
+    /// 用的是系统的「带主动作的菜单」，跟 Safari 长按返回键是同一种交互
+    private func addButton(_ bar: RootBottomBar) -> some View {
+        Menu {
+            Button("智能记账", systemImage: "sparkles", action: bar.smart)
+        } label: {
+            Label("记一笔", systemImage: "plus")
+        } primaryAction: {
+            bar.add()
+        }
+        .accessibilityHint("长按可以选智能记账")
     }
 
     func body(content: Content) -> some View {
@@ -333,20 +363,28 @@ struct RootBottomToolbar: ViewModifier {
                 // 两个 ToolbarItem 中间放弹性空白，才会拆成左右两个独立的玻璃块；
                 // 不拆的话会合进同一个胶囊里
                 content.toolbar {
+                    // ⚠️ sharedBackgroundVisibility(.hidden) 不能省：工具栏默认会给每个 item
+                    // 垫一层玻璃胶囊，而分段控件自己就是一个胶囊 —— 两层叠起来就是
+                    // 「胶囊套胶囊」的双圈描边（2026-10-09 用户嫌丑的就是这个）。
+                    // 去掉外层，只留分段控件自己那一层，跟右边的「+」一样是单层玻璃
                     ToolbarItem(placement: .bottomBar) { picker(bar) }
+                        .sharedBackgroundVisibility(.hidden)
                     ToolbarSpacer(.flexible, placement: .bottomBar)
                     ToolbarItem(placement: .bottomBar) {
-                        Button("记一笔", systemImage: "plus", action: bar.add)
-                            .buttonStyle(.glassProminent)
+                        addButton(bar).buttonStyle(.glassProminent)
                     }
                 }
+                // ⚠️ 上面把分段控件的外层胶囊去掉之后，系统会改在底部画一整条磨砂底栏
+                //（整屏宽的一层白雾，用户说「下面有一层东西，更丑了」）。
+                // 明确关掉底栏背景，只留两颗浮着的玻璃控件
+                .toolbarBackgroundVisibility(.hidden, for: .bottomBar)
+                .scrollEdgeEffectHidden(true, for: .bottom)
             } else {
                 content.toolbar {
                     ToolbarItemGroup(placement: .bottomBar) {
                         picker(bar)
                         Spacer()
-                        Button("记一笔", systemImage: "plus", action: bar.add)
-                            .buttonStyle(.borderedProminent)
+                        addButton(bar).buttonStyle(.borderedProminent)
                     }
                 }
             }

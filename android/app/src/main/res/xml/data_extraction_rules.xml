@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  备份 / 换机迁移时排除的东西（Android 12 起认这个文件）。
+
+  smart_secret.xml 里是加密过的 DeepSeek key（见 smart/SmartAi.kt 的 DeepSeekKeyStore）。
+  解它的钥匙在 Android Keystore 里、本来就不跟着备份走，所以带过去也解不开；
+  但「key 不出这台手机」是对用户的承诺，干脆连密文都不带走。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="smart_secret.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="smart_secret.xml" />
+    </device-transfer>
+</data-extraction-rules>

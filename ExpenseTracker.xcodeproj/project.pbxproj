@@ -18,6 +18,8 @@
 		AB1000000000000000000D01 /* Sync.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000D02 /* Sync.swift */; };
 		AB10000000000000000000B3 /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB10000000000000000000F3 /* Components.swift */; };
 		AB1000000000000000000AK1 /* AmountKeypad.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000AK2 /* AmountKeypad.swift */; };
+		AB1000000000000000000SE1 /* SmartEntryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000SE2 /* SmartEntryView.swift */; };
+		AB1000000000000000000SP1 /* SmartParse.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000SP2 /* SmartParse.swift */; };
 		AB10000000000000000000B4 /* ExpenseListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB10000000000000000000F4 /* ExpenseListView.swift */; };
 		AB10000000000000000000B5 /* ExpenseFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB10000000000000000000F5 /* ExpenseFormView.swift */; };
 		AB10000000000000000000B6 /* StatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB10000000000000000000F6 /* StatsView.swift */; };
@@ -68,6 +70,8 @@
 		AB1000000000000000000D02 /* Sync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync.swift; sourceTree = "<group>"; };
 		AB10000000000000000000F3 /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
 		AB1000000000000000000AK2 /* AmountKeypad.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmountKeypad.swift; sourceTree = "<group>"; };
+		AB1000000000000000000SE2 /* SmartEntryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartEntryView.swift; sourceTree = "<group>"; };
+		AB1000000000000000000SP2 /* SmartParse.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartParse.swift; sourceTree = "<group>"; };
 		AB10000000000000000000F4 /* ExpenseListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpenseListView.swift; sourceTree = "<group>"; };
 		AB10000000000000000000F5 /* ExpenseFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpenseFormView.swift; sourceTree = "<group>"; };
 		AB10000000000000000000F6 /* StatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsView.swift; sourceTree = "<group>"; };
@@ -135,6 +139,8 @@
 				AB1000000000000000000D02 /* Sync.swift */,
 				AB10000000000000000000F3 /* Components.swift */,
 				AB1000000000000000000AK2 /* AmountKeypad.swift */,
+				AB1000000000000000000SE2 /* SmartEntryView.swift */,
+				AB1000000000000000000SP2 /* SmartParse.swift */,
 				AB10000000000000000000F4 /* ExpenseListView.swift */,
 				AB10000000000000000000F5 /* ExpenseFormView.swift */,
 				AB1000000000000000000FB1 /* PrivacyGate.swift */,
@@ -285,6 +291,8 @@
 				AB1000000000000000000D01 /* Sync.swift in Sources */,
 				AB10000000000000000000B3 /* Components.swift in Sources */,
 				AB1000000000000000000AK1 /* AmountKeypad.swift in Sources */,
+				AB1000000000000000000SE1 /* SmartEntryView.swift in Sources */,
+				AB1000000000000000000SP1 /* SmartParse.swift in Sources */,
 				AB10000000000000000000B4 /* ExpenseListView.swift in Sources */,
 				AB10000000000000000000B5 /* ExpenseFormView.swift in Sources */,
 				AB1000000000000000000BB1 /* PrivacyGate.swift in Sources */,
@@ -476,6 +484,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = ExpenseTracker/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "记账本";
+				INFOPLIST_KEY_NSCameraUsageDescription = "拍小票，用来智能记账。";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "用来确认是你本人，才显示私密记录。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -508,6 +517,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = ExpenseTracker/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "记账本";
+				INFOPLIST_KEY_NSCameraUsageDescription = "拍小票，用来智能记账。";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "用来确认是你本人，才显示私密记录。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

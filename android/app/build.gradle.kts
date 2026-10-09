@@ -52,6 +52,11 @@ android {
         // 共用一套的话必然出事：要么调试时**误连生产**（模拟器里那点假数据会被推到
         // 真服务器上，跟真账目混在一起），要么发到手机上的包指着一个手机根本
         // 访问不到的 10.0.2.2 —— 而后者的症状只是「同步一直不成功」，很难一眼看出来。
+        // 只打 arm64 一种 CPU 的原生库（2026-10-09 加智能记账时加的）。
+        // ML Kit 读字库每种 CPU 一份、一份 7~11MB，四种全带安装包就胖出 30 多 MB。
+        // vivo 真机和这台 Mac 上的模拟器都是 arm64，另外三种（x86 / x86_64 / armv7）用不上
+        ndk { abiFilters += "arm64-v8a" }
+
         buildConfigField("String", "DEFAULT_SYNC_URL", "\"${localProps.getProperty("sync.url", "")}\"")
         buildConfigField("String", "DEFAULT_SYNC_TOKEN", "\"${localProps.getProperty("sync.token", "")}\"")
     }
@@ -152,4 +157,6 @@ dependencies {
     implementation(libs.datastore.preferences)
     // 指纹/人脸解锁，对位 iOS 那边的 Face ID 门
     implementation(libs.biometric)
+    // 智能记账：从图片里读字（离线、免费），对位 iOS 的 Vision
+    implementation(libs.mlkit.text.chinese)
 }

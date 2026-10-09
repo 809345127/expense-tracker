@@ -47,6 +47,8 @@ fun ExpenseListScreen(
     onOpenExport: () -> Unit,
     onToggleLock: () -> Unit,
     onAdd: () -> Unit,
+    /// 智能记账（2026-10-09 加）。入口是「记一笔」上面那颗小按钮，理由见 SmartEntryScreen 顶部
+    onSmart: () -> Unit,
     onEdit: (ExpenseEntity) -> Unit,
     bottomBar: @Composable () -> Unit,
     vm: ExpenseListViewModel = viewModel(),
@@ -121,6 +123,10 @@ fun ExpenseListScreen(
         },
         bottomBar = bottomBar,
         floatingActionButton = {
+          Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            SmallFloatingActionButton(onClick = onSmart) {
+                Icon(Icons.Filled.AutoAwesome, contentDescription = "智能记账")
+            }
             ExtendedFloatingActionButton(
                 onClick = onAdd,
                 expanded = fabExpanded,
@@ -130,6 +136,7 @@ fun ExpenseListScreen(
                 icon = { Icon(Icons.Filled.Add, contentDescription = "记一笔") },
                 text = { Text("记一笔") },
             )
+          }
         },
     ) { padding ->
         // 下拉刷新（2026-09-05 加的）。

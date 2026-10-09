@@ -8,4 +8,6 @@
 -->
 <paths>
     <cache-path name="export" path="export/" />
+    <!-- 智能记账「拍照」时，系统相机把照片写到这里（相机是另一个 app，只能给它一个 content:// 地址） -->
+    <cache-path name="camera" path="camera/" />
 </paths>

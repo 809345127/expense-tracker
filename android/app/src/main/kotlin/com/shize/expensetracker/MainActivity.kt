@@ -53,6 +53,7 @@ class MainActivity : FragmentActivity() {
         data object Tags : Screen { override val depth = 1 }
         data object Export : Screen { override val depth = 1 }
         data class Form(val editing: ExpenseEntity?) : Screen { override val depth = 1 }
+        data object Smart : Screen { override val depth = 1 }
     }
 
     private enum class Tab { List, Stats }
@@ -70,11 +71,23 @@ class MainActivity : FragmentActivity() {
     /// 用 State 而不是直接改导航状态：onNewIntent 可能在 Compose 还没组合时就来了
     private val pendingAdd = mutableStateOf(false)
 
+    /// debug 包专用：adb 带进来的「打开智能记账 + 预填文字 / 图片路径」。正式包永远是 null。
+    /// `adb shell am start -n <包名>/com.shize.expensetracker.MainActivity --ez openSmart true
+    ///   --es smartText "午饭 32" --es smartImage /data/local/tmp/x.jpg --es deepseekBase http://10.0.2.2:18930`
+    private val debugSmart = mutableStateOf<Pair<String?, String?>?>(null)
+
+    private fun applyDebugIntent(i: Intent?) {
+        if (!BuildConfig.DEBUG || i == null) return
+        if (i.hasExtra("deepseekBase")) com.shize.expensetracker.smart.DeepSeekConfig.setDebugBase(this, i.getStringExtra("deepseekBase"))
+        if (i.getBooleanExtra("openSmart", false)) debugSmart.value = i.getStringExtra("smartText") to i.getStringExtra("smartImage")
+    }
+
     @OptIn(ExperimentalAnimationApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         pendingAdd.value = intent?.action == ACTION_ADD
+        applyDebugIntent(intent)
 
         val app = App.from(this)
         val gate = app.gate
@@ -95,6 +108,8 @@ class MainActivity : FragmentActivity() {
                     if (unlocked) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
                 }
+
+                LaunchedEffect(debugSmart.value) { if (debugSmart.value != null) screen = Screen.Smart }
 
                 // 小组件那颗「＋」进来 → 直接推到记一笔
                 LaunchedEffect(pendingAdd.value) {
@@ -158,6 +173,7 @@ class MainActivity : FragmentActivity() {
                                     onOpenExport = { screen = Screen.Export },
                                     onToggleLock = toggleLock,
                                     onAdd = { screen = Screen.Form(null) },
+                                    onSmart = { screen = Screen.Smart },
                                     onEdit = { screen = Screen.Form(it) },
                                     bottomBar = bottomBar,
                                 )
@@ -178,6 +194,11 @@ class MainActivity : FragmentActivity() {
                         Screen.Categories -> CategoryManagerScreen(onBack = { screen = Screen.Home })
                         Screen.Tags -> TagManagerScreen(onBack = { screen = Screen.Home })
                         Screen.Export -> ExportScreen(onBack = { screen = Screen.Home })
+                        Screen.Smart -> SmartEntryScreen(
+                            onClose = { screen = Screen.Home },
+                            debugText = debugSmart.value?.first,
+                            debugImage = debugSmart.value?.second,
+                        )
                         is Screen.Form -> ExpenseFormScreen(
                             editing = s.editing,
                             onClose = { screen = Screen.Home },
@@ -192,6 +213,7 @@ class MainActivity : FragmentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.action == ACTION_ADD) pendingAdd.value = true
+        applyDebugIntent(intent)
     }
 
     override fun onStart() {
