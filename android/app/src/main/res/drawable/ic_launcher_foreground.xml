@@ -1,9 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 跟 iOS 同一个图标：三条渐变横条（像一列账目）+ 一个金色圆点。
+     坐标照抄 tools/make_icon.swift 的 1024 画布（换成了上到下的 y），改一边记得改另一边。
+     自适应图标只保证中间那个直径 66/108 的圆一定可见，所以整组缩到 0.86 倍。 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp" android:height="108dp"
-    android:viewportWidth="108" android:viewportHeight="108">
-    <!-- 自适应图标里只有中间 66x66 那块是一定看得见的，所以图形要缩在中间 -->
-    <group android:translateX="27" android:translateY="27">
-        <path android:fillColor="#FFFFFF"
-            android:pathData="M27,10 L27,10 L38,10 L27.5,29 L34,29 L34,34 L26,34 L26,38 L34,38 L34,43 L26,43 L26,50 L20,50 L20,43 L12,43 L12,38 L20,38 L20,34 L12,34 L12,29 L18.5,29 L8,10 L19,10 L23,19 Z" />
+    android:viewportWidth="1024" android:viewportHeight="1024">
+    <group android:pivotX="512" android:pivotY="512" android:scaleX="0.86" android:scaleY="0.86">
+        <path android:pathData="M306,272 H718 A56,56 0 0 1 718,384 H306 A56,56 0 0 1 306,272 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="250" android:startY="0" android:endX="774" android:endY="0"
+                    android:startColor="#5EE7C3" android:endColor="#2BC4F0" />
+            </aapt:attr>
+        </path>
+        <path android:pathData="M306,456 H574 A56,56 0 0 1 574,568 H306 A56,56 0 0 1 306,456 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="250" android:startY="0" android:endX="774" android:endY="0"
+                    android:startColor="#2BC4F0" android:endColor="#4C7DFF" />
+            </aapt:attr>
+        </path>
+        <path android:pathData="M306,640 H444 A56,56 0 0 1 444,752 H306 A56,56 0 0 1 306,640 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="250" android:startY="0" android:endX="774" android:endY="0"
+                    android:startColor="#4C7DFF" android:endColor="#8B5CFF" />
+            </aapt:attr>
+        </path>
+        <path android:fillColor="#FFC94D"
+            android:pathData="M662,696 A56,56 0 1 0 774,696 A56,56 0 1 0 662,696 Z" />
     </group>
 </vector>

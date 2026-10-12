@@ -1,4 +1,4 @@
-// 生成 1024x1024 的 App 图标：蓝色渐变底 + 白色 ¥
+// 生成 1024x1024 的 App 图标：深海军蓝底 + 三条渐变横条（像一列账目）+ 一个金色圆点
 //
 // ⚠️ 这里有个坑，改动前务必看一眼（2026-08-17 踩过）：
 // 旧版用 NSBitmapImageRep(samplesPerPixel: 3, hasAlpha: false) 建画布，再往上画。
@@ -10,8 +10,13 @@
 // 这个格式是 CoreGraphics 支持的，且导出的 PNG 不带透明通道
 // —— iOS 的 App 图标不允许带透明通道，所以这一点是必须的。
 //
+// ⚠️ 第二个坑：drawLinearGradient 默认只画起点到终点之间那一段，两头以外留黑。
+// 斜着拉渐变时角落会露出黑三角，所以 options 一定要带 drawsBefore / drawsAfter。
+//
+// 安卓那边的同款图标是手写的矢量图（res/drawable/ic_launcher_foreground.xml），
+// 改这里的颜色或比例时记得两边一起改。
+//
 // 用法：swift tools/make_icon.swift <输出路径>
-// 想换配色改下面 topColor / bottomColor 两个值即可。
 
 import AppKit
 import CoreGraphics
@@ -20,57 +25,52 @@ import UniformTypeIdentifiers
 
 let px = 1024
 let size = CGFloat(px)
+let cs = CGColorSpaceCreateDeviceRGB()
 
-// 底色渐变，与 app 内顶部卡片同源（#2E8BFF -> #084A94）
-let topColor = NSColor(srgbRed: 0.18, green: 0.545, blue: 1.0, alpha: 1)
-let bottomColor = NSColor(srgbRed: 0.031, green: 0.29, blue: 0.58, alpha: 1)
+func rgb(_ hex: UInt32) -> CGColor {
+    CGColor(srgbRed: CGFloat((hex >> 16) & 0xff) / 255,
+            green: CGFloat((hex >> 8) & 0xff) / 255,
+            blue: CGFloat(hex & 0xff) / 255, alpha: 1)
+}
+func gradient(_ a: UInt32, _ b: UInt32) -> CGGradient {
+    CGGradient(colorsSpace: cs, colors: [rgb(a), rgb(b)] as CFArray, locations: nil)!
+}
+let extend: CGGradientDrawingOptions = [.drawsBeforeStartLocation, .drawsAfterEndLocation]
 
 guard let ctx = CGContext(
     data: nil, width: px, height: px,
-    bitsPerComponent: 8, bytesPerRow: 0,
-    space: CGColorSpaceCreateDeviceRGB(),
+    bitsPerComponent: 8, bytesPerRow: 0, space: cs,
     bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
 ) else {
     fatalError("建画布失败：像素格式不被 CoreGraphics 支持")
 }
 
-NSGraphicsContext.saveGraphicsState()
-NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+// 1. 底色：深海军蓝，上浅下深一点点，避免一整块死黑
+ctx.drawLinearGradient(gradient(0x16263D, 0x0A1220),
+                       start: CGPoint(x: 0, y: size), end: CGPoint(x: 0, y: 0), options: extend)
 
-let full = NSRect(x: 0, y: 0, width: size, height: size)
-
-// 1. 渐变底
-NSGradient(starting: topColor, ending: bottomColor)!.draw(in: full, angle: -70)
-
-// 2. 左上角一点柔光，让底色不至于太平（矩形铺满整张，避免出现拼接硬边）
-NSGradient(starting: NSColor(white: 1, alpha: 0.18), ending: NSColor(white: 1, alpha: 0))!
-    .draw(in: full, relativeCenterPosition: NSPoint(x: -0.5, y: 0.5))
-
-// 3. 白色 ¥（系统圆体、加粗），精确居中
-//
-// ⚠️ 别用 NSAttributedString.draw(at:) + boundingRect 来居中：那个矩形带着字体的
-// 上下留白（ascender / descender），¥ 这种没有下伸部分的字形会被顶到偏上的位置，
-// 图标下方空一大块。要拿「字形真实墨迹范围」，只有 CoreText 的
-// CTFontGetBoundingRectsForGlyphs 给得准。
-let fontSize: CGFloat = 700
-let desc = NSFont.systemFont(ofSize: fontSize, weight: .bold).fontDescriptor.withDesign(.rounded)!
-let font = NSFont(descriptor: desc, size: fontSize)!
-let ctFont = font as CTFont
-
-var ch: UniChar = Array("¥".utf16)[0]
-var glyph = CGGlyph(0)
-guard CTFontGetGlyphsForCharacters(ctFont, &ch, &glyph, 1) else {
-    fatalError("这个字体里没有 ¥ 字形")
+// 2. 三条横条，从上到下变短，颜色从薄荷青渐到紫（CoreGraphics 原点在左下，所以 y 越大越靠上）
+//    整组宽 524、高 480（三条 112 + 两段间距 72），正好落在画布正中
+let left: CGFloat = 250, barH: CGFloat = 112, fullW: CGFloat = 524
+let bars: [(y: CGFloat, width: CGFloat, from: UInt32, to: UInt32)] = [
+    (640, 524, 0x5EE7C3, 0x2BC4F0),
+    (456, 380, 0x2BC4F0, 0x4C7DFF),
+    (272, 250, 0x4C7DFF, 0x8B5CFF),
+]
+for bar in bars {
+    let rect = CGRect(x: left, y: bar.y, width: bar.width, height: barH)
+    ctx.saveGState()
+    ctx.addPath(CGPath(roundedRect: rect, cornerWidth: barH / 2, cornerHeight: barH / 2, transform: nil))
+    ctx.clip()
+    // 渐变统一按整组宽度拉，短条只露出前一段，三条的颜色变化节奏一致
+    ctx.drawLinearGradient(gradient(bar.from, bar.to),
+                           start: CGPoint(x: left, y: 0), end: CGPoint(x: left + fullW, y: 0), options: extend)
+    ctx.restoreGState()
 }
 
-// 墨迹范围是相对于「基线原点」的，所以把基线原点挪到 画布中心 - 墨迹中心 即可
-let ink = CTFontGetBoundingRectsForGlyphs(ctFont, .horizontal, &glyph, nil, 1)
-var baselineOrigin = CGPoint(x: size / 2 - ink.midX, y: size / 2 - ink.midY)
-
-ctx.setFillColor(NSColor.white.cgColor)
-CTFontDrawGlyphs(ctFont, &glyph, &baselineOrigin, 1, ctx)
-
-NSGraphicsContext.restoreGraphicsState()
+// 3. 最短那条右边的金色圆点
+ctx.setFillColor(rgb(0xFFC94D))
+ctx.fillEllipse(in: CGRect(x: 662, y: 272, width: barH, height: barH))
 
 guard let cgImage = ctx.makeImage() else { fatalError("导出位图失败") }
 
