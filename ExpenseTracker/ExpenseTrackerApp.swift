@@ -268,6 +268,13 @@ struct RootView: View {
         pages
         .sheet(isPresented: $showingAdd) { ExpenseFormView() }
         .sheet(isPresented: $showingSmart) { SmartEntryView() }
+        // 快捷指令「截图记账」放了一张图进来 → 打开智能记账（图由 SmartEntryView 自己取走）。
+        // 智能记账已经开着时不用动，它自己会接
+        .onChange(of: PendingScreenshot.shared.image != nil, initial: true) { _, has in
+            guard has, !showingSmart else { return }
+            showingAdd = false
+            showingSmart = true
+        }
         // 桌面小组件点一下：add → 弹「记一笔」，home → 明细页。见 handleDeepLink 上面那张表
         .onOpenURL { handleDeepLink($0) }
         #if DEBUG

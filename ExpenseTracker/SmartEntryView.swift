@@ -74,6 +74,15 @@ struct SmartEntryView: View {
                     if let i = drafts.firstIndex(where: { $0.id == edited.id }) { drafts[i] = edited }
                 }
             }
+            // 快捷指令「截图记账」送来的图：放进去、直接开始识别（见 ShortcutIntents.swift）。
+            // ⚠️ 正在核对上一批时不接 —— 那会把还没保存的草稿冲掉；图留着，下次打开再取
+            .onChange(of: PendingScreenshot.shared.image != nil, initial: true) { _, has in
+                guard has, phase == .input, let img = PendingScreenshot.shared.image else { return }
+                PendingScreenshot.shared.image = nil
+                text = ""
+                images = [img]
+                recognize()
+            }
             .fullScreenCover(isPresented: $showingCamera) {
                 CameraPicker { img in if images.count < maxImages { images.append(img) } }
                     .ignoresSafeArea()
