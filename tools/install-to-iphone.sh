@@ -17,7 +17,7 @@ if [ -z "$DEVICES" ]; then
 fi
 echo "$DEVICES" | sed 's/^/  /'
 # ⚠️ 两种 id 格式都要认：老版本列的是 CoreDevice 的 UUID（8-4-4-4-12），
-# Xcode 27 Beta 5 起列的是硬件 UDID（`00008140-000528A91E40801C`，8-16）。
+# Xcode 27 Beta 5 起列的是硬件 UDID（`00008XXX-XXXXXXXXXXXXXXXX`，8-16）。
 # 只认前一种的话，这里拿到空串，后面每一步都报「device name provided is an empty string」
 UDID=$(echo "$DEVICES" | head -1 | grep -oE '[0-9A-Fa-f]{8}-([0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}|[0-9A-Fa-f]{16})' | head -1)
 [ -n "$UDID" ] || { echo "  ✗ 认不出设备 id，devicectl 的输出格式可能又变了（见上面那行）"; exit 1; }
