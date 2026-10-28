@@ -13,6 +13,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.IosShare
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -212,7 +215,8 @@ private fun saveToGallery(context: Context, name: String, bmp: Bitmap): Boolean 
     } ?: false
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/// 导出弹层。**照 iOS `ExportSheet` 做**（2026-10-13）：右上「完成」；
+/// 「范围」一张卡（本月 | 全部 + 包含几笔多少钱）、「给 AI 分析」一张卡（蓝色图标 + 蓝字的动作行）、「长图」一张卡。
 @Composable
 fun ExportScreen(onBack: () -> Unit, vm: ExportViewModel = viewModel()) {
     val context = LocalContext.current
@@ -225,108 +229,75 @@ fun ExportScreen(onBack: () -> Unit, vm: ExportViewModel = viewModel()) {
     val total = remember(records) { records.expenseSum() }
     val heightPt = remember(records) { LongImage.measureHeight(LongImage.group(records)) }
     val tooBig = LongImage.tooBig(heightPt)
+    val c = Ios.c
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("导出") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
-                    }
-                },
-            )
-        }
-    ) { padding ->
-        Column(
-            Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                ExportScope.entries.forEachIndexed { i, s ->
-                    SegmentedButton(
-                        selected = scope == s,
-                        onClick = { vm.setScope(s) },
-                        shape = SegmentedButtonDefaults.itemShape(i, ExportScope.entries.size),
-                    ) { Text(s.label) }
-                }
+    IosSheetHeader("导出", trailing = { IosPillButton("完成", onBack, prominent = true) })
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 8.dp, bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp),
+    ) {
+        IosSection(header = "范围") {
+            Box(Modifier.padding(horizontal = Ios.rowInset, vertical = 12.dp)) {
+                IosSegmented(ExportScope.entries.map { it.label }, ExportScope.entries.indexOf(scope),
+                             { vm.setScope(ExportScope.entries[it]) }, Modifier.fillMaxWidth())
             }
-
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("包含", style = MaterialTheme.typography.bodyMedium)
-                Text("${records.size} 笔 · ${formatYuan(total)}",
-                     style = MaterialTheme.typography.bodyMedium)
-            }
-
+            row(first = false) { IosValueRowContent("包含", "${records.size} 笔 · ${formatYuan(total)}") }
             if (unlocked) {
-                // ⚠️ 这条提示必须有：解锁着导出会把私密记录一起带出去，
-                // 而这一步是**不可撤销**的（文件发出去就收不回来了）
-                Row(verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Icon(Icons.Filled.LockOpen, null, Modifier.size(16.dp),
-                         tint = MaterialTheme.colorScheme.error)
-                    Text("私密模式开着，导出的内容包含私密记录，文件名里会带「含私密」",
-                         style = MaterialTheme.typography.bodySmall,
-                         color = MaterialTheme.colorScheme.error)
+                // ⚠️ 这条提示必须有：解锁着导出会把私密记录一起带出去，而这一步是**不可撤销**的（文件发出去就收不回来了）
+                row(first = false) {
+                    Icon(Icons.Filled.LockOpen, null, Modifier.size(14.dp), tint = c.orange)
+                    Spacer(Modifier.width(6.dp))
+                    Text("私密模式开着，导出的内容包含私密记录，文件名里会带「含私密」", style = Ios.caption, color = c.orange)
                 }
             }
+        }
 
-            HorizontalDivider()
+        IosSection(
+            header = "给 AI 分析",
+            footer = "一行一笔，含记账时间、创建时间、收支、金额、分类、备注、标签。直接「复制成文本」粘给 AI 最快；要存档或者用 Excel 打开就导文件。",
+        ) {
+            ActionRow(true, Icons.Outlined.IosShare, "导出 CSV 文件", !busy && records.isNotEmpty()) { vm.shareCsv(context) }
+            ActionRow(false, Icons.Outlined.ContentCopy, "复制成文本", records.isNotEmpty()) { vm.copyCsv(context) }
+        }
 
-            Text("给 AI 分析", style = MaterialTheme.typography.titleSmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { vm.copyCsv(context) }, enabled = records.isNotEmpty()) {
-                    Icon(Icons.Filled.ContentCopy, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("复制成文本")
-                }
-                OutlinedButton(
-                    onClick = { vm.shareCsv(context) },
-                    enabled = !busy && records.isNotEmpty(),
-                ) {
-                    Icon(Icons.Filled.IosShare, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("导出 CSV")
-                }
+        IosSection(
+            header = "长图",
+            footer = "由 app 把整页重新画一张完整长图，样式跟明细页一致。",
+        ) {
+            ActionRow(true, Icons.Outlined.Image, "生成并存相册", !busy && records.isNotEmpty() && !tooBig) {
+                vm.makeLongImage(context, alsoSave = true)
             }
-            Text(
-                "一行一笔，含记账时间、创建时间、收支、金额、分类、备注、标签。" +
-                        "直接「复制成文本」粘给 AI 最快；要存档或者用 Excel 打开就导文件。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            HorizontalDivider()
-
-            Text("长图", style = MaterialTheme.typography.titleSmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = { vm.makeLongImage(context, alsoSave = true) },
-                    enabled = !busy && records.isNotEmpty() && !tooBig,
-                ) {
-                    Icon(Icons.Filled.Image, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("生成并存相册")
-                }
-                OutlinedButton(
-                    onClick = { vm.makeLongImage(context, alsoSave = false) },
-                    enabled = !busy && records.isNotEmpty() && !tooBig,
-                ) { Text("只分享") }
+            ActionRow(false, Icons.Outlined.IosShare, "只分享长图", !busy && records.isNotEmpty() && !tooBig) {
+                vm.makeLongImage(context, alsoSave = false)
             }
             if (tooBig) {
-                Text(
-                    "${records.size} 笔画出来有 ${heightPt.toInt()} 点高，超过了一张图能有的最大高度" +
-                            "（大约 ${LongImage.approxRowCapacity()} 笔）。改选「本月」，或者用上面的 CSV。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
+                row(first = false) {
+                    Text("${records.size} 笔画出来有 ${heightPt.toInt()} 点高，超过了一张图能有的最大高度" +
+                         "（大约 ${LongImage.approxRowCapacity()} 笔）。改选「本月」，或者用上面的 CSV。",
+                         style = Ios.caption, color = c.orange)
+                }
             }
-
-            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-            if (message.isNotEmpty()) {
-                Text(message, style = MaterialTheme.typography.bodyMedium)
+            if (busy || message.isNotEmpty()) {
+                row(first = false) {
+                    if (busy) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = c.secondaryLabel)
+                        Spacer(Modifier.width(10.dp))
+                    }
+                    Text(if (busy) "正在处理…" else message, style = Ios.footnote, color = c.secondaryLabel)
+                }
             }
-            Spacer(Modifier.height(24.dp))
         }
+    }
+}
+
+/// 动作行：蓝色图标 + 蓝字（iOS Form 里的 Button / ShareLink 就是这个样子）
+@Composable
+private fun IosSectionScope.ActionRow(first: Boolean, icon: androidx.compose.ui.graphics.vector.ImageVector,
+                                      label: String, enabled: Boolean, onClick: () -> Unit) {
+    val color = if (enabled) Ios.c.accent else Ios.c.tertiaryLabel
+    row(first = first, onClick = if (enabled) onClick else null, separatorIndent = Ios.rowInset + 40.dp) {
+        Icon(icon, null, tint = color, modifier = Modifier.size(24.dp))
+        Spacer(Modifier.width(16.dp))
+        Text(label, style = Ios.body, color = color)
     }
 }

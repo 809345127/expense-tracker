@@ -1,7 +1,6 @@
 package com.shize.expensetracker.ui
 
 import android.app.Application
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -17,7 +16,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -30,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -70,11 +69,10 @@ import kotlin.math.roundToInt
 // 折中：**显示只用看得见的笔数**（可能是 0），删除与否按全部记录判；
 // 出现「显示 0 笔却不给删」时，提示语**不写数字**，只说「还有记录在用」。
 //
-// ## ⚠️ 跟 iOS 故意不一样：删除入口
+// ## 删除入口：左滑（2026-10-13 起跟 iOS 一样）
 //
-// iOS 是左滑删除。安卓这边**故意不做左滑** —— Material 里没有这个模式，
-// 硬做出来手感是别人家的。删除放在「点进去编辑」那一页里 + 确认弹窗，
-// 跟这个 app 删一笔账的做法保持一致（见交接文档坑 G10）。
+// 原来安卓故意不做左滑、删除放在编辑页里 —— 那是照 Material 的习惯。
+// 用户要求界面全部照 iOS 之后，改成跟 iOS 一样左滑删除；删不掉时弹「删不掉」说明原因。
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class CategoryManagerViewModel(app: Application) : AndroidViewModel(app) {
@@ -106,224 +104,182 @@ class CategoryManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 }
 
-/// 一行的固定高度。
-/// ⚠️ **拖动排序的下标算法依赖它是固定值**（见 DraggableCategoryList）：
-/// 行高一样，"拖了多远 = 跨过了几行"就是一道除法，不用去问 LazyColumn 每一行多高。
-/// 改这个值没问题，改成"每行高度不一样"就得连算法一起改。
-private val ROW_HEIGHT = 64.dp
+/// 一行的固定高度（含分隔线）。
+/// ⚠️ **拖动排序的下标算法依赖它是固定值**（见 CategorySection）：
+/// 行高一样，"拖了多远 = 跨过了几行"就是一道除法。改这个值没问题，改成"每行高度不一样"就得连算法一起改。
+private val ROW_HEIGHT = 60.dp
 
-@OptIn(ExperimentalMaterial3Api::class)
+/// 分类管理弹层。**照 iOS `CategoryManagerView` 做**（2026-10-13）：
+/// 左上「完成」、右上「+」（点开选新建支出分类还是收入分类）；
+/// 支出、收入两组白卡，一行一个分类（图标 + 名字 + 用了几笔 + 小箭头）；
+/// **长按一行拖动排序、往左滑删除、点一下进编辑** —— 跟 iOS 的 List 一样。
+///
+/// （安卓原来是「支出 | 收入」分段切换 + 右边一个拖动把手 + 删除放在编辑页里，
+///  那是照 Material 的习惯做的；现在两端统一成 iOS 这一套。）
 @Composable
 fun CategoryManagerScreen(onBack: () -> Unit, vm: CategoryManagerViewModel = viewModel()) {
     val categories by vm.categories.collectAsStateWithLifecycle()
     val (usageAll, usageVisible) = vm.usage.collectAsStateWithLifecycle().value
 
-    // null = 不在编辑；Some(null) = 新建；Some(c) = 编辑 c
+    // null = 不在编辑；Optional(null) = 新建；Optional(c) = 编辑 c
     var editing by remember { mutableStateOf<Optional<CategoryEntity>?>(null) }
-    // 现在看的是支出分类还是收入分类。新建时建的就是这一种 ——
-    // 分类建好之后不能在支出和收入之间换（代号前缀定死了，见 CategoryKind）
-    var incomeTab by rememberSaveable { mutableStateOf(false) }
-    val shown = categories.filter { it.isIncome == incomeTab }
+    var creatingIncome by remember { mutableStateOf(false) }
+    var addMenu by remember { mutableStateOf(false) }
+    var blocked by remember { mutableStateOf<String?>(null) }
+    var swiped by remember { mutableStateOf<String?>(null) }
+    val c = Ios.c
 
-    val target = editing
-    if (target != null) {
-        // ⚠️ 编辑页是"盖在"分类列表上的一层，返回键要退回列表、不是退出 app。
-        // 这一层必须自己拦：MainActivity 那个 BackHandler 只知道「现在在分类页」，
-        // 不知道分类页里面还嵌了一层
-        BackHandler { editing = null }
-        CategoryEditorScreen(
-            editing = target.value,
-            income = target.value?.isIncome ?: incomeTab,
-            allCategories = categories,
-            usageAll = usageAll,
-            usageVisible = usageVisible,
-            onClose = { editing = null },
-            vm = vm,
-        )
-        return
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("分类") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { editing = Optional(null) }) {
-                        Icon(Icons.Filled.Add, "新建分类")
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            IosSheetHeader(
+                "分类",
+                leading = { IosPillButton("完成", onBack) },
+                trailing = {
+                    Box {
+                        IosPillButton(icon = Icons.Filled.Add, contentDescription = "新建分类", onClick = { addMenu = true })
+                        DropdownMenu(addMenu, { addMenu = false }) {
+                            DropdownMenuItem({ Text("支出分类") }, { addMenu = false; creatingIncome = false; editing = Optional(null) })
+                            DropdownMenuItem({ Text("收入分类") }, { addMenu = false; creatingIncome = true; editing = Optional(null) })
+                        }
                     }
                 },
             )
-        }
-    ) { padding ->
-        Column(Modifier.padding(padding)) {
-            // 支出、收入分开两组，各排各的顺序（记一笔时也是分开显示的）
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-                listOf(false to "支出", true to "收入").forEachIndexed { i, (v, label) ->
-                    SegmentedButton(
-                        selected = incomeTab == v, onClick = { incomeTab = v },
-                        shape = SegmentedButtonDefaults.itemShape(i, 2),
-                    ) { Text(label) }
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 8.dp, bottom = 32.dp),
+                verticalArrangement = Arrangement.spacedBy(24.dp),
+            ) {
+                for (income in listOf(false, true)) {
+                    // ⚠️ key 跟着组：两组各自一份拖动状态
+                    androidx.compose.runtime.key(income) {
+                        CategorySection(
+                            title = if (income) "收入" else "支出",
+                            footer = if (income) "长按拖动可以调整顺序，顺序决定记一笔时九宫格的排列。\n左滑删除；已经有账目在用的分类删不掉，先把那些账改到别的分类。" else null,
+                            categories = categories.filter { it.isIncome == income },
+                            usageVisible = usageVisible,
+                            swiped = swiped,
+                            onSwiped = { swiped = it },
+                            onClick = { editing = Optional(it) },
+                            onDelete = { cat ->
+                                swiped = null
+                                val reason = whyCannotDelete(cat, usageAll, usageVisible)
+                                if (reason != null) blocked = reason else vm.delete(cat) {}
+                            },
+                            onReorder = vm::reorder,
+                        )
+                    }
                 }
             }
-            Text(
-                "长按右边的把手拖动可以调整顺序，顺序决定「记一笔」时格子的排列。\n" +
-                        "点进去可以改名字、图标、颜色，也能删 —— 已经有账目在用的分类删不掉，" +
-                        "先把那些账改到别的分类。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-            // ⚠️ key 跟着 incomeTab：两组共用一个拖动列表组件，切组时要把它的拖动状态整个丢掉
-            androidx.compose.runtime.key(incomeTab) {
-            DraggableCategoryList(
-                categories = shown,
-                usageVisible = usageVisible,
-                onClick = { editing = Optional(it) },
-                onReorder = vm::reorder,
-            )
-            }
         }
+
+        // 编辑 / 新建是叠在上面的又一层弹层（iOS 也是 sheet 套 sheet）
+        IosSheetHost(editing, { editing = null }) { target ->
+            CategoryEditorScreen(
+                editing = target.value,
+                income = target.value?.isIncome ?: creatingIncome,
+                allCategories = categories,
+                onClose = { editing = null },
+                vm = vm,
+            )
+        }
+    }
+
+    blocked?.let { msg ->
+        IosAlert("删不掉", msg, listOf(IosAlertButton("知道了", cancel = true) { blocked = null }), { blocked = null })
     }
 }
 
 /// 让 `null` 能表示两种不同意思（不在编辑 / 正在新建）
 private data class Optional<T>(val value: T?)
 
-// ---------------------------------------------------------------- 拖动排序
+// ---------------------------------------------------------------- 一组 + 拖动排序
 
-/// 长按拖动排序。
+/// 一组分类：长按某一行拖动排序（iOS List 的 onMove 手感），左滑删除，点一下编辑。
 ///
-/// ⚠️ **为什么是自己写的，不是拉一个库**：Compose foundation 到 1.11 都还没有官方的
-/// 「可重排 LazyColumn」。第三方库有（sh.calvin.reorderable 之类），但这个项目的规矩是
-/// 依赖版本要一条条去 maven-metadata 核对（凭记忆写版本号栽过一次），
-/// 为一个 60 行的交互拖进一个依赖不划算。
+/// ⚠️ **为什么拖动是自己写的，不是拉一个库**：Compose foundation 到 1.11 都还没有官方的
+/// 「可重排列表」，为一个 60 行的交互拖进一个依赖不划算。
 ///
 /// 算法（**成立的前提是每行等高**，见 ROW_HEIGHT）：
-///   1. 长按某一行 → 记下它现在是第几个（dragIndex）
+///   1. 长按某一行 → 记下它现在是第几个
 ///   2. 手指移动 → 累计位移 dy；`dy / 行高` 四舍五入就是"跨过了几行"
-///   3. 跨过了就在本地列表里把它挪过去，**同时把 dy 减掉一行的高度**
+///   3. 跨过了就在本地列表里把它挪过去，**同时把 dy 减掉实际挪的行数 × 行高**
 ///      （否则它会一路飞到底 —— 位移没归零，下一帧又判定要再跨一行）
 ///   4. 松手 → 把整个新顺序交给 Repository 重新编号 + 标 dirty 推出去
-///
-/// ⚠️ **没做「拖到屏幕边缘自动滚动」**：现在 12 个分类刚好在一屏内，用不上。
-/// 分类多到超过一屏时，拖到边上会停住 —— 分两次拖即可，不是坏了。
-/// 真要补，得处理"列表滚了之后手指位置和行位置的相对关系变了"，不是加一行 scrollBy 能了事的。
 @Composable
-private fun DraggableCategoryList(
+private fun CategorySection(
+    title: String,
+    footer: String?,
     categories: List<CategoryEntity>,
     usageVisible: Map<String, Int>,
+    swiped: String?,
+    onSwiped: (String?) -> Unit,
     onClick: (CategoryEntity) -> Unit,
+    onDelete: (CategoryEntity) -> Unit,
     onReorder: (List<CategoryEntity>) -> Unit,
 ) {
-    val listState = rememberLazyListState()
     val rowPx = with(LocalDensity.current) { ROW_HEIGHT.toPx() }
-
     // 拖动期间用这份本地顺序渲染；没在拖的时候跟着库走
     var order by remember(categories) { mutableStateOf(categories) }
     var dragId by remember { mutableStateOf<String?>(null) }
     var dragDy by remember { mutableFloatStateOf(0f) }
+    val c = Ios.c
 
-    LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-        items(order, key = { it.id }) { c ->
-            val dragging = c.id == dragId
-            // ⚠️ 分隔线画在这个 Column **里面**，让「一行占的高度」正好是 ROW_HEIGHT。
-            // 之前分隔线是列表里另一个元素，行距变成 65px 而算法按 64px 算 ——
-            // 每跨一行差 1px，行数一多就会少跨/多跨一行
-            Column(Modifier.height(ROW_HEIGHT)) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    // 被拖的那一行浮起来：跟着手指走 + 抬到最上层 + 加个投影
-                    .zIndex(if (dragging) 1f else 0f)
-                    .graphicsLayer { translationY = if (dragging) dragDy else 0f }
-                    .shadow(if (dragging) 6.dp else 0.dp)
-                    .background(
-                        if (dragging) MaterialTheme.colorScheme.surfaceContainerHighest
-                        else MaterialTheme.colorScheme.surface
-                    )
-                    .clickable(enabled = dragId == null) { onClick(c) }
-                    .padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val color = categoryColor(c.colorIndex)
-                Box(
-                    Modifier.size(34.dp).clip(RoundedCornerShape(10.dp))
-                        .background(color.copy(alpha = 0.16f)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(categoryIcon(c.iconName), contentDescription = null,
-                         tint = color, modifier = Modifier.size(18.dp))
-                }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(c.name, style = MaterialTheme.typography.bodyLarge,
-                         maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(
-                        usageText(c, usageVisible[c.id] ?: 0),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                // 拖动把手。⚠️ 手势挂在把手上而不是整行：整行既要能点开编辑、
-                // 又要能长按拖动的话，两个手势会互相抢（长按之后点击还会不会触发要看时序），
-                // 给一个专门的抓取点最不容易误触
-                Icon(
-                    Icons.Filled.DragHandle,
-                    contentDescription = "拖动排序：${c.name}",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .padding(start = 8.dp)
-                        .size(40.dp)
-                        .padding(8.dp)
-                        // ⚠️⚠️ key 只能用 c.id，**绝不能用 order**。
-                        // 用 order 的话每次换位 order 就变了 → Compose 把这个手势检测器
-                        // 整个销毁重建 → **正在进行的拖动被当场取消**（还会走 onDragCancel
-                        // 把顺序回滚）。症状是「拖了半天松手一点没变」，而且不报错。
-                        // 这里压根不需要把 order 当 key：下面是用 indexOfFirst 现查下标的。
-                        .pointerInput(c.id) {
-                            detectDragGesturesAfterLongPress(
-                                onDragStart = { dragId = c.id; dragDy = 0f },
-                                onDragEnd = {
-                                    dragId = null; dragDy = 0f
-                                    onReorder(order)
-                                },
-                                onDragCancel = {
-                                    // 取消：把本地顺序丢回库里那份，别留一个没提交的假顺序
-                                    dragId = null; dragDy = 0f; order = categories
-                                },
-                                onDrag = { change, amount ->
-                                    change.consume()
-                                    dragDy += amount.y
-                                    val from = order.indexOfFirst { it.id == c.id }
-                                    if (from < 0) return@detectDragGesturesAfterLongPress
-                                    val steps = (dragDy / rowPx).roundToInt()
-                                    if (steps != 0) {
-                                        val to = (from + steps).coerceIn(0, order.lastIndex)
-                                        if (to != from) {
-                                            order = order.toMutableList().apply {
-                                                add(to, removeAt(from))
-                                            }
-                                            // ⚠️ 位移要按**实际挪动的行数**扣掉，不是按 steps ——
-                                            // 拖到头顶/末尾时 coerceIn 会把 to 夹住，
-                                            // 按 steps 扣的话位移会凭空少一截、行会往回跳
-                                            dragDy -= (to - from) * rowPx
-                                        }
+    IosSection(header = title, footer = footer) {
+        order.forEachIndexed { i, cat ->
+            val dragging = cat.id == dragId
+            Box(
+                Modifier.zIndex(if (dragging) 1f else 0f)
+                    .graphicsLayer { translationY = if (dragging) dragDy else 0f; if (dragging) { scaleX = 1.02f; scaleY = 1.02f } }
+                    .shadow(if (dragging) 8.dp else 0.dp)
+                    // ⚠️⚠️ key 只能用 cat.id，**绝不能用 order**：用 order 的话每次换位手势检测器就被销毁重建，
+                    // 正在进行的拖动被当场取消（症状是「拖了半天松手一点没变」，而且不报错）
+                    .pointerInput(cat.id) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = { dragId = cat.id; dragDy = 0f; onSwiped(null) },
+                            onDragEnd = { dragId = null; dragDy = 0f; onReorder(order) },
+                            // 取消：把本地顺序丢回库里那份，别留一个没提交的假顺序
+                            onDragCancel = { dragId = null; dragDy = 0f; order = categories },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                dragDy += amount.y
+                                val from = order.indexOfFirst { it.id == cat.id }
+                                if (from < 0) return@detectDragGesturesAfterLongPress
+                                val steps = (dragDy / rowPx).roundToInt()
+                                if (steps != 0) {
+                                    val to = (from + steps).coerceIn(0, order.lastIndex)
+                                    if (to != from) {
+                                        order = order.toMutableList().apply { add(to, removeAt(from)) }
+                                        // ⚠️ 按**实际挪动的行数**扣，不是按 steps —— 拖到头尾时 to 会被夹住
+                                        dragDy -= (to - from) * rowPx
                                     }
-                                },
-                            )
-                        },
-                )
-            }
-            HorizontalDivider(Modifier.padding(start = 62.dp))
+                                }
+                            },
+                        )
+                    }
+            ) {
+                IosSwipeRow(
+                    open = swiped == cat.id,
+                    onOpenChange = { onSwiped(if (it) cat.id else null) },
+                    actions = listOf(IosSwipeAction("删除", c.red) { onDelete(cat) }),
+                ) {
+                    Column(Modifier.height(ROW_HEIGHT)) {
+                        if (i > 0) IosSeparator(Ios.rowInset + 46.dp)
+                        Row(
+                            Modifier.fillMaxWidth().weight(1f).clickable(enabled = dragId == null) { onClick(cat) }
+                                .padding(horizontal = Ios.rowInset),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            IosCategoryIcon(categoryIcon(cat.iconName), categoryColor(cat.colorIndex), 34.dp)
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(cat.name, style = Ios.body, color = c.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(usageText(cat, usageVisible[cat.id] ?: 0), style = Ios.caption2, color = c.secondaryLabel)
+                            }
+                            IosChevron()
+                        }
+                    }
+                }
             }
         }
-        item { Spacer(Modifier.height(24.dp)) }
     }
 }
 
@@ -335,15 +291,14 @@ private fun usageText(c: CategoryEntity, visibleCount: Int): String = when {
 
 // ---------------------------------------------------------------- 新建 / 编辑
 
-@OptIn(ExperimentalMaterial3Api::class)
+/// 新建 / 编辑分类。照 iOS `CategoryEditorView`：
+/// 第一张卡是实时预览的图标 + 名字输入框；然后「颜色」七列色点；然后按组列出的图标（六列）。
 @Composable
 private fun CategoryEditorScreen(
     editing: CategoryEntity?,
-    /// 是不是收入分类。编辑时跟着它自己走；新建时是列表页当前那一组
+    /// 是不是收入分类。编辑时跟着它自己走；新建时是「+」菜单里选的那一种
     income: Boolean,
     allCategories: List<CategoryEntity>,
-    usageAll: Map<String, Int>,
-    usageVisible: Map<String, Int>,
     onClose: () -> Unit,
     vm: CategoryManagerViewModel,
 ) {
@@ -352,8 +307,7 @@ private fun CategoryEditorScreen(
     var colorIndex by remember {
         mutableIntStateOf(editing?.colorIndex ?: (allCategories.size % categoryColorCount))
     }
-    var confirmDelete by remember { mutableStateOf(false) }
-    var blocked by remember { mutableStateOf<String?>(null) }
+    val c = Ios.c
 
     val cleaned = com.shize.expensetracker.data.cleanedName(name)
     /// 重名判断：忽略大小写、全角半角、变音符号（同 iOS）。改自己的名字时把自己排除掉
@@ -365,139 +319,81 @@ private fun CategoryEditorScreen(
         }
     }
     val canSave = cleaned.isNotEmpty() && !duplicate
+    val tint = categoryColor(colorIndex)
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(if (editing == null) (if (income) "新建收入分类" else "新建支出分类") else "编辑分类") },
-                navigationIcon = {
-                    IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "取消") }
-                },
-                actions = {
-                    if (editing != null) {
-                        IconButton(onClick = {
-                            val reason = whyCannotDelete(editing, usageAll, usageVisible)
-                            if (reason != null) blocked = reason else confirmDelete = true
-                        }) {
-                            Icon(Icons.Filled.Delete, "删除",
-                                 tint = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                    TextButton(
-                        onClick = { vm.save(editing, name, iconName, colorIndex, income); onClose() },
-                        enabled = canSave,
-                    ) { Text("保存") }
-                },
-            )
-        }
-    ) { padding ->
-        Column(
-            Modifier.padding(padding).verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            // 实时预览：改名字、换图标、换颜色，这里立刻跟着变
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                val color = categoryColor(colorIndex)
-                Box(
-                    Modifier.size(52.dp).clip(RoundedCornerShape(15.dp))
-                        .background(color.copy(alpha = 0.16f)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(categoryIcon(iconName), contentDescription = null,
-                         tint = color, modifier = Modifier.size(27.dp))
-                }
-                Spacer(Modifier.width(14.dp))
-                OutlinedTextField(
-                    value = name, onValueChange = { name = it },
-                    label = { Text("分类名字") }, singleLine = true,
-                    isError = duplicate,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-
-            if (duplicate) {
-                Text("已经有一个叫「$cleaned」的分类了",
-                     style = MaterialTheme.typography.bodySmall,
-                     color = MaterialTheme.colorScheme.error)
-            } else if (editing != null && cleaned.isNotEmpty() && editing.name != cleaned) {
-                Text("改名之后，这个分类下已有的账目会跟着显示新名字 —— 历史数据不用动。",
-                     style = MaterialTheme.typography.bodySmall,
-                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-
-            Text("颜色", style = MaterialTheme.typography.titleSmall)
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(7),
-                modifier = Modifier.fillMaxWidth().heightIn(max = 120.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                items((0 until categoryColorCount).toList()) { i ->
-                    Box(
-                        Modifier.size(34.dp).clip(CircleShape)
-                            .background(categoryColor(i))
-                            .clickable { colorIndex = i },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (colorIndex == i) {
-                            Icon(Icons.Filled.Check, "已选中", tint = Color.White,
-                                 modifier = Modifier.size(18.dp))
-                        }
-                    }
-                }
-            }
-
-            for ((title, icons) in categoryIconGroups) {
-                Text(title, style = MaterialTheme.typography.titleSmall)
-                val tint = categoryColor(colorIndex)
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(6),
-                    modifier = Modifier.fillMaxWidth()
-                        .heightIn(max = ((icons.size + 5) / 6 * 50).dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(icons) { icon ->
-                        val selected = iconName == icon
-                        Box(
-                            Modifier.size(42.dp).clip(RoundedCornerShape(11.dp))
-                                .background(if (selected) tint else tint.copy(alpha = 0.14f))
-                                .clickable { iconName = icon },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(categoryIcon(icon), contentDescription = icon,
-                                 tint = if (selected) Color.White else tint,
-                                 modifier = Modifier.size(20.dp))
-                        }
-                    }
-                }
-            }
-            Spacer(Modifier.height(24.dp))
-        }
-    }
-
-    if (confirmDelete && editing != null) {
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            title = { Text("删掉「${editing.name}」？") },
-            text = { Text("删掉之后另一台设备下次同步也会跟着删。这个分类还没有账目在用，所以不会影响任何记录。") },
-            confirmButton = {
-                TextButton(onClick = { vm.delete(editing) { onClose() } }) {
-                    Text("删除", color = MaterialTheme.colorScheme.error)
-                }
+    IosSheetHeader(
+        if (editing == null) (if (income) "新建收入分类" else "新建支出分类") else "编辑分类",
+        leading = { IosPillButton("取消", onClose) },
+        trailing = {
+            IosPillButton("保存", { vm.save(editing, name, iconName, colorIndex, income); onClose() },
+                          enabled = canSave, prominent = true)
+        },
+    )
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 8.dp, bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp),
+    ) {
+        IosSection(
+            footer = when {
+                duplicate -> "已经有一个叫「$cleaned」的分类了"
+                editing != null && cleaned.isNotEmpty() && editing.name != cleaned ->
+                    "改名之后，这个分类下已有的账目会跟着显示新名字 —— 历史数据不用动。"
+                else -> null
             },
-            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } },
-        )
-    }
+        ) {
+            row(first = true, minHeight = 72.dp) {
+                // 实时预览：改名字、换图标、换颜色，这里立刻跟着变
+                IosCategoryIcon(categoryIcon(iconName), tint, 52.dp)
+                Spacer(Modifier.width(14.dp))
+                IosInlineField(name, { name = it }, "分类名字", align = TextAlign.Start)
+            }
+        }
 
-    blocked?.let { msg ->
-        AlertDialog(
-            onDismissRequest = { blocked = null },
-            title = { Text("删不掉") },
-            text = { Text(msg) },
-            confirmButton = { TextButton(onClick = { blocked = null }) { Text("知道了") } },
-        )
+        IosSection(header = "颜色") {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                (0 until categoryColorCount).chunked(7).forEach { rowIdx ->
+                    Row {
+                        rowIdx.forEach { i ->
+                            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                                Box(
+                                    Modifier.size(30.dp).clip(CircleShape).background(categoryColor(i)).clickable { colorIndex = i },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    if (colorIndex == i) Icon(Icons.Filled.Check, "已选中", tint = Color.White, modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+                        repeat(7 - rowIdx.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+            }
+        }
+
+        for ((title, icons) in categoryIconGroups) {
+            IosSection(header = title) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    icons.chunked(6).forEach { rowIcons ->
+                        Row {
+                            rowIcons.forEach { icon ->
+                                val selected = iconName == icon
+                                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                                    Box(
+                                        Modifier.size(40.dp).clip(RoundedCornerShape(11.dp))
+                                            .background(if (selected) tint else tint.copy(alpha = 0.14f))
+                                            .clickable { iconName = icon },
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Icon(categoryIcon(icon), icon, tint = if (selected) Color.White else tint,
+                                             modifier = Modifier.size(20.dp))
+                                    }
+                                }
+                            }
+                            repeat(6 - rowIcons.size) { Spacer(Modifier.weight(1f)) }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -4,54 +4,60 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.shize.expensetracker.ui.IosColors
+import com.shize.expensetracker.ui.LocalIos
+import com.shize.expensetracker.ui.iosColorsFor
 
-/// Material 3 主题。
+/// 主题。
 ///
-/// 两件事让这个 app 看起来「是安卓上的 app」，而不是把 iOS 排版套了个安卓控件：
-///
-/// ① **动态取色（Material You）**：系统按用户壁纸生成一整套配色，app 跟着走。
-///    这是安卓独有的，iOS 没有对等的东西。不用写版本分支 —— 它要 Android 12+，minSdk 是 33。
-///
-/// ② **圆角按 Expressive 那一档放大**（见下面 `ExpressiveShapes`）。
-///
-/// ⚠️⚠️ **这里没有用 `MaterialExpressiveTheme`，是查过之后放弃的，别再试**：
-/// material3 **1.4.0（当前最新稳定版）里 `MaterialExpressiveTheme` 和
-/// `ExperimentalMaterial3ExpressiveApi` 都是 `internal`** —— 类确实在 jar 里
-/// （用 `unzip -l` 能看到），但**库外面调不到**，编译报
-/// 「Cannot access ...: it is internal in file」。
-/// 光看「类在不在」会得出相反的结论，可见性要靠编译器才问得出来。
-///
-/// 想用官方那套只有两条路，两条都不走：
-///   · 升到 `1.5.0-alpha*` —— 这个项目只用稳定版（1.4.0 之后再没有稳定版，全是 alpha）；
-///   · 升 Compose 1.12 / BOM 2026.08 —— 那要 `compileSdk 37`，而 android-37 只在 canary 频道，
-///     给日常在用的手机装预览 SDK 编出来的包不合适（这条早就否过一次了）。
-///
-/// 所以 Expressive 的**观感**在这里是用公开 API 自己搭的：形状放大在这个文件，
-/// 弹簧动效在 `ui/Motion.kt`。缺的只是官方那套组件（ButtonGroup / FloatingToolbar 之类），
-/// 这个 app 用不上。
+/// ⚠️ 2026-10-13 起**不再跟壁纸动态取色（Material You）**，改成固定的 iOS 系统色：
+/// 用户「所有的 UI 都参照着 iOS 版本的改」—— 两台手机换着用，配色得一样。
+/// 页面主要用 `ui/IosKit.kt` 里的零件（它们读 `LocalIos`）；
+/// 这里把 Material 的配色也映射到同一套 iOS 色上，剩下还在用 Material 组件的地方
+/// （菜单、日期选择器、输入框光标……）颜色也不会跑偏。
 @Composable
 fun AppTheme(content: @Composable () -> Unit) {
-    val context = LocalContext.current
-    val colors = if (isSystemInDarkTheme()) dynamicDarkColorScheme(context)
-                 else dynamicLightColorScheme(context)
-    MaterialTheme(colorScheme = colors, shapes = ExpressiveShapes, content = content)
+    val ios = iosColorsFor(isSystemInDarkTheme())
+    CompositionLocalProvider(LocalIos provides ios) {
+        MaterialTheme(colorScheme = materialFrom(ios), shapes = IosShapes, content = content)
+    }
 }
 
-/// 圆角比 Material 的默认档大一圈 —— 这是 Expressive 那一版最直观的改动。
-///
-/// 好处是**改一处、全 app 生效**：按钮、卡片、chip、底部弹层、弹框、输入框
-/// 都从 `MaterialTheme.shapes` 取形状，不用逐个组件去设。
-///
-/// 默认档 → 这里：extraSmall 4→6 / small 8→10 / medium 12→16 / large 16→24 / extraLarge 28→32
-val ExpressiveShapes = Shapes(
-    extraSmall = RoundedCornerShape(6.dp),
+private fun materialFrom(c: IosColors) = if (c.isDark) darkColorScheme(
+    primary = c.accent, onPrimary = Color.White,
+    primaryContainer = c.accent.copy(alpha = 0.25f), onPrimaryContainer = c.label,
+    secondaryContainer = c.fill, onSecondaryContainer = c.label,
+    background = c.groupedBg, onBackground = c.label,
+    surface = c.groupedBg, onSurface = c.label,
+    surfaceVariant = c.card, onSurfaceVariant = c.secondaryLabel,
+    surfaceContainerLowest = c.card, surfaceContainerLow = c.card, surfaceContainer = c.card,
+    surfaceContainerHigh = Color(0xFF2C2C2E), surfaceContainerHighest = Color(0xFF3A3A3C),
+    outline = c.separator, outlineVariant = c.separator,
+    error = c.red,
+) else lightColorScheme(
+    primary = c.accent, onPrimary = Color.White,
+    primaryContainer = c.accent.copy(alpha = 0.12f), onPrimaryContainer = c.label,
+    secondaryContainer = c.fill, onSecondaryContainer = c.label,
+    background = c.groupedBg, onBackground = c.label,
+    surface = c.groupedBg, onSurface = c.label,
+    surfaceVariant = c.card, onSurfaceVariant = c.secondaryLabel,
+    surfaceContainerLowest = c.card, surfaceContainerLow = c.card, surfaceContainer = c.card,
+    surfaceContainerHigh = c.card, surfaceContainerHighest = c.card,
+    outline = c.separator, outlineVariant = c.separator,
+    error = c.red,
+)
+
+/// 圆角跟 iOS 对齐：弹框 14、菜单 12、卡片 22
+val IosShapes = Shapes(
+    extraSmall = RoundedCornerShape(8.dp),
     small = RoundedCornerShape(10.dp),
-    medium = RoundedCornerShape(16.dp),
-    large = RoundedCornerShape(24.dp),
-    extraLarge = RoundedCornerShape(32.dp),
+    medium = RoundedCornerShape(14.dp),
+    large = RoundedCornerShape(22.dp),
+    extraLarge = RoundedCornerShape(28.dp),
 )

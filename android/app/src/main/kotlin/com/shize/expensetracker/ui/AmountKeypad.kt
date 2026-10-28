@@ -1,5 +1,11 @@
 package com.shize.expensetracker.ui
 
+import androidx.compose.ui.draw.clip
+
+import androidx.compose.foundation.clickable
+
+import androidx.compose.foundation.background
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -183,49 +189,45 @@ fun AmountKeypad(onKey: (AmountKey) -> Unit, canSave: Boolean, onSave: () -> Uni
         listOf(AmountKey.Digit(1), AmountKey.Digit(2), AmountKey.Digit(3), AmountKey.Op(AmountOp.Minus)),
         listOf(AmountKey.Dot, AmountKey.Digit(0), AmountKey.Backspace, AmountKey.Op(AmountOp.Plus)),
     )
-    Surface(color = MaterialTheme.colorScheme.surfaceContainer, tonalElevation = 2.dp) {
-        Column(
-            Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            for (row in rows) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (key in row) KeyButton(key, Modifier.weight(1f)) { onKey(key) }
-                }
+    // 长相照 iOS `AmountKeypad`（2026-10-13）：系统工具栏那种浅灰底，数字键白色、运算键灰色 + 蓝字，圆角 12
+    val c = Ios.c
+    Column(
+        Modifier.fillMaxWidth()
+            .background(if (c.isDark) androidx.compose.ui.graphics.Color(0xFF161618) else androidx.compose.ui.graphics.Color(0xFFF7F7F9))
+            .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        for (row in rows) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (key in row) KeyButton(key, Modifier.weight(1f)) { onKey(key) }
             }
-            Button(
-                onClick = onSave, enabled = canSave,
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-            ) { Text("保存", style = MaterialTheme.typography.titleMedium) }
         }
+        IosProminentButton("保存", onSave, enabled = canSave, modifier = Modifier.height(48.dp))
     }
 }
 
 @Composable
 private fun KeyButton(key: AmountKey, modifier: Modifier, onClick: () -> Unit) {
     val isAction = key is AmountKey.Op || key is AmountKey.Backspace
-    val cs = MaterialTheme.colorScheme
+    val c = Ios.c
     val name = when (key) {
         is AmountKey.Digit -> "${key.d}"
         AmountKey.Dot -> "小数点"
         is AmountKey.Op -> key.op.label
         AmountKey.Backspace -> "删除"
     }
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(14.dp),
-        color = if (isAction) cs.secondaryContainer else cs.surfaceContainerLowest,
-        contentColor = if (isAction) cs.onSecondaryContainer else cs.onSurface,
-        modifier = modifier.height(52.dp).semantics { contentDescription = name },
+    Box(
+        modifier.height(48.dp).clip(RoundedCornerShape(12.dp))
+            .background(if (isAction) c.fill else c.card)
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = name },
+        contentAlignment = Alignment.Center,
     ) {
-        Box(contentAlignment = Alignment.Center) {
-            when (key) {
-                is AmountKey.Digit -> Text("${key.d}", fontSize = 24.sp, fontWeight = FontWeight.Medium)
-                AmountKey.Dot -> Text(".", fontSize = 26.sp, fontWeight = FontWeight.Bold)
-                is AmountKey.Op -> Text(key.op.symbol.toString(), fontSize = 24.sp, fontWeight = FontWeight.Medium)
-                AmountKey.Backspace -> Icon(Icons.AutoMirrored.Filled.Backspace, null)
-            }
+        when (key) {
+            is AmountKey.Digit -> Text("${key.d}", fontSize = 24.sp, fontWeight = FontWeight.Medium, color = c.label)
+            AmountKey.Dot -> Text(".", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = c.label)
+            is AmountKey.Op -> Text(key.op.symbol.toString(), fontSize = 24.sp, fontWeight = FontWeight.Medium, color = c.accent)
+            AmountKey.Backspace -> Icon(Icons.AutoMirrored.Filled.Backspace, null, tint = c.label)
         }
     }
 }

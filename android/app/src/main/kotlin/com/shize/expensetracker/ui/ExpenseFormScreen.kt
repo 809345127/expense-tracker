@@ -4,22 +4,16 @@ import android.app.Application
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Event
-import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.activity.compose.BackHandler
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
@@ -92,13 +86,15 @@ class ExpenseFormViewModel(app: Application) : AndroidViewModel(app) {
     }
 }
 
-/// 「记一笔」/ 编辑。
+/// 「记一笔」/ 编辑。**长相照 iOS `ExpenseFormView` 做**（2026-10-13 用户要求全部照 iOS）：
 ///
-/// 2026-09-05 补了两样**原来没有**的东西：
-///   ① **日期和时间可以改了** —— 在这之前安卓只能记「此刻」，等于**补记不了账**
-///      （而列表里那个「· 补记」标记因此永远不可能出现在安卓记的账上）。iOS 一直有。
-///   ② **标签可以打了** —— 在这之前安卓端标签只有数据层，界面上一个入口都没有。
-@OptIn(ExperimentalMaterial3Api::class)
+///   · 顶栏：左「取消」、中间标题、右「保存」（浮起的白胶囊）；
+///   · 第一张卡：「支出 | 收入」分段控件 + 大号金额（点它弹出底部计算器键盘）；
+///   · 「分类」组：标题右边一个「管理」，下面五列的分类格子；
+///   · 第三张卡：记账时间（日期、时刻两颗灰胶囊）/ 创建时间（只编辑时有）/ 备注 / 标签 / 私密开关；
+///   · 编辑时最底下一张卡「删除这笔记录」（红字）。
+///
+/// 2026-09-05 补过的两样仍在：日期时间可以改（补记账）、标签可以打。
 @Composable
 fun ExpenseFormScreen(
     editing: ExpenseEntity?,
@@ -110,6 +106,7 @@ fun ExpenseFormScreen(
 ) {
     val categories by vm.categories.collectAsStateWithLifecycle()
     val unlocked by vm.unlocked.collectAsStateWithLifecycle()
+    val allTags by viewModel<TagsViewModel>().allTags.collectAsStateWithLifecycle()
 
     // 金额算式（自定义键盘输进来的，可以带加减乘除）。**只有正数**，正负由 isIncome 决定。
     // 编辑时从金额的绝对值开始（收入存的是负数，界面上不显示负号）
@@ -128,17 +125,14 @@ fun ExpenseFormScreen(
     var note by remember { mutableStateOf(editing?.note ?: draft?.note ?: "") }
     var chosenKey by remember { mutableStateOf(editing?.categoryKey ?: draft?.categoryKey ?: "") }
     var showCategories by remember { mutableStateOf(false) }
+    var showTags by remember { mutableStateOf(false) }
 
     // 私密开关的值。null = 用户还没自己拨过。
-    //
-    // ⚠️ 「新建时默认跟随解锁态」这件事**每次渲染现算**，不在 LaunchedEffect 里事后补 ——
-    // 这个项目记着「别指望先渲染、再在 onAppear 里补状态」那条教训。现算就没有先后顺序问题。
-    // ⚠️ 为什么解锁态下新建要默认打私密：特意解锁进来多半就是为了记这一笔。
-    // 不想私密的话那一行就在眼前，拨回去即可。（跟 iOS `isPrivate = gate.isUnlocked` 一致。）
+    // ⚠️ 「新建时默认跟随解锁态」这件事**每次渲染现算**，不在 LaunchedEffect 里事后补。
+    // ⚠️ 为什么解锁态下新建要默认打私密：特意解锁进来多半就是为了记这一笔（跟 iOS `isPrivate = gate.isUnlocked` 一致）
     var privateChoice by remember { mutableStateOf(editing?.isPrivate ?: draft?.isPrivate) }
     var date by remember { mutableLongStateOf(editing?.date ?: draft?.date ?: System.currentTimeMillis()) }
     var tagIds by remember { mutableStateOf(draft?.tagIds ?: emptySet()) }
-    var confirmDelete by remember { mutableStateOf(false) }
     var showDate by remember { mutableStateOf(false) }
     var showTime by remember { mutableStateOf(false) }
 
@@ -147,12 +141,8 @@ fun ExpenseFormScreen(
         if (editing != null) vm.loadTags(editing.id) { tagIds = it }
     }
 
-    /// 选中哪个分类 **每次渲染时现算**，不靠"先渲染再在别处补状态"。
-    /// ⚠️ 这是 iOS 那边踩出来的教训：分类是库里的数据，界面第一帧还没有，
-    /// 在事后回调里补 state 会「时好时坏」（懒加载的行不一定重画）。
-    /// 现算就没有先后顺序问题 —— 数据到了那一帧结果就是对的。
-    ///
-    /// 2026-10-01 起还要跟着「支出 / 收入」走：九宫格只显示当前这一种；切到收入时原来选的
+    /// 选中哪个分类 **每次渲染时现算**，不靠"先渲染再在别处补状态"（iOS 那边踩出来的教训）。
+    /// 2026-10-01 起还要跟着「支出 / 收入」走：格子只显示当前这一种；切到收入时原来选的
     /// 「餐饮」不在这组里，就落到收入的第一个上，切回支出它又回来（chosenKey 一直记着）
     val shown = categories.filter { it.isIncome == isIncome }
     val effectiveKey = when {
@@ -162,6 +152,7 @@ fun ExpenseFormScreen(
     val amount = expr.value
     val canSave = amount != null && effectiveKey.isNotEmpty()
     val isPrivate = privateChoice ?: unlocked
+    val selectedTags = allTags.filter { it.id in tagIds }
     val save = {
         if (draft != null && onDraftDone != null) {
             // 草稿：不写库，改好交回核对列表。人看过、改过了，就不再标黄
@@ -175,313 +166,206 @@ fun ExpenseFormScreen(
             }
         } else vm.save(editing, amount, isIncome, effectiveKey, note, isPrivate, date, tagIds, onClose)
     }
+    val c = Ios.c
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(if (draft != null) "核对这一笔" else if (editing == null) "记一笔" else "编辑") },
-                navigationIcon = {
-                    IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "取消") }
-                },
-                actions = {
-                    if (editing != null) {
-                        IconButton(onClick = { confirmDelete = true }) {
-                            Icon(Icons.Filled.Delete, "删除",
-                                 tint = MaterialTheme.colorScheme.error)
+    Box(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize()) {
+        IosSheetHeader(
+            if (draft != null) "核对这一笔" else if (editing == null) "记一笔" else "编辑",
+            leading = { IosPillButton("取消", onClose) },
+            trailing = { IosPillButton("保存", { save() }, enabled = canSave, prominent = true) },
+        )
+        Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(top = 8.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(24.dp),
+        ) {
+            // ---- 支出 / 收入 + 金额 ----
+            // 收入不是靠输负号，是靠这个切换（键盘上的「−」只用来做减法，见 AmountExpression）
+            IosCard(Modifier.padding(horizontal = Ios.sideInset)) {
+                Column(Modifier.padding(horizontal = Ios.rowInset, vertical = 14.dp)) {
+                    IosSegmented(listOf("支出", "收入"), if (isIncome) 1 else 0, { isIncome = it == 1 },
+                                 Modifier.fillMaxWidth())
+                    // 显示正在输的算式；带运算符时下面多一行「= 结果」。点它 → 收起系统键盘、露出自定义键盘
+                    Column(
+                        Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 4.dp)
+                            .clickable(remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, null) {
+                                focusManager.clearFocus(); keypadShown = true
+                            },
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("¥", fontSize = 28.sp, fontWeight = FontWeight.SemiBold, color = c.secondaryLabel)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                if (expr.isEmpty) "0.00" else expr.text,
+                                fontSize = 34.sp, fontWeight = FontWeight.Bold,
+                                color = when { expr.isEmpty -> c.tertiaryLabel; isIncome -> c.income; else -> c.label },
+                                maxLines = 1,
+                            )
+                        }
+                        if (expr.hasOperator) {
+                            Text(
+                                amount?.let { "= ${formatYuan(it)}" } ?: "算不出来",
+                                style = Ios.subheadline.copy(fontWeight = FontWeight.Medium),
+                                color = if (amount == null) c.red else c.secondaryLabel,
+                            )
                         }
                     }
-                    // ⚠️ 用实心 Button 而不是原来那颗灰扑扑的 TextButton：
-                    // 这是这一页**唯一的主动作**，Material 的规矩是主动作要用填充按钮。
-                    // 原来那个禁用态几乎看不见，用户不知道为什么按不了
-                    Button(
-                        onClick = { save() },
-                        enabled = canSave,
-                        modifier = Modifier.padding(end = 8.dp),
-                    ) { Text("保存") }
-                },
-            )
-        },
-        // 自定义键盘贴在底部。放 bottomBar 而不是叠在内容上：Scaffold 会把内容区让出来，
-        // 滚到最底下的备注、私密那几行不会被键盘压住
-        bottomBar = {
-            androidx.compose.animation.AnimatedVisibility(
-                visible = keypadShown && !noteFocused,
-                enter = androidx.compose.animation.slideInVertically { it },
-                exit = androidx.compose.animation.slideOutVertically { it },
-            ) {
-                AmountKeypad(onKey = { expr = expr.press(it) }, canSave = canSave, onSave = { save() })
-            }
-        },
-    ) { padding ->
-        Column(
-            Modifier.padding(padding).verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
-        ) {
-            // ---- 支出 / 收入 ----
-            // 收入不是靠输负号，是靠这个切换（键盘上的「−」只用来做减法，见 AmountExpression）
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(top = 4.dp)) {
-                listOf(false to "支出", true to "收入").forEachIndexed { i, (v, label) ->
-                    SegmentedButton(
-                        selected = isIncome == v, onClick = { isIncome = v },
-                        shape = SegmentedButtonDefaults.itemShape(i, 2),
-                    ) { Text(label) }
                 }
             }
 
-            // ---- 金额 ----
-            // 显示正在输的算式；带运算符时下面多一行「= 结果」。
-            // 点它 → 收起系统键盘、露出自定义键盘
-            Column(
-                Modifier.fillMaxWidth()
-                    .clickable { focusManager.clearFocus(); keypadShown = true }
-                    .padding(vertical = 4.dp),
+            // ---- 分类格子 ----
+            // 「管理」放在标题右边：低频操作，不跟格子抢位置；记到一半发现分类不够用时不用退出去重进
+            IosSection(
+                header = "分类",
+                headerTrailing = {
+                    Text("管理", style = Ios.caption.copy(fontSize = 13.sp), color = c.accent,
+                         modifier = Modifier.clickable { showCategories = true }.padding(4.dp))
+                },
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("¥", fontSize = 28.sp, fontWeight = FontWeight.SemiBold,
-                         color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        if (expr.isEmpty) "0.00" else expr.text,
-                        style = MaterialTheme.typography.displaySmall.copy(fontWeight = FontWeight.Bold),
-                        color = when {
-                            expr.isEmpty -> MaterialTheme.colorScheme.outline
-                            isIncome -> incomeColor()
-                            else -> MaterialTheme.colorScheme.onSurface
+                Column(Modifier.padding(horizontal = 8.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    shown.chunked(5).forEach { rowCats ->
+                        Row {
+                            rowCats.forEach { cat ->
+                                CategoryCell(cat, cat.id == effectiveKey, Modifier.weight(1f)) { chosenKey = cat.id }
+                            }
+                            repeat(5 - rowCats.size) { Spacer(Modifier.weight(1f)) }
+                        }
+                    }
+                }
+            }
+
+            // ---- 时间 / 备注 / 标签 / 私密 ----
+            IosSection(
+                // ⚠️ 这台机器没设锁屏密码 / 没录指纹时，私密开关其实是**没有牙的**：没有任何凭据可验，
+                // 私密门只能直接放行（见 PrivacyGate.unlock）。既然如此就得当场说清楚，不能让人以为藏住了
+                footer = if (unlocked && !hasDeviceLock(LocalContext.current))
+                    "这台手机还没设锁屏密码，所以「私密」挡不住人 —— 去系统设置里加一个锁屏密码或指纹，它才有用。" else null,
+            ) {
+                row(first = true) {
+                    Text("记账时间", style = Ios.body, color = c.label, modifier = Modifier.weight(1f))
+                    DateCapsule(date.dateText()) { showDate = true }
+                    Spacer(Modifier.width(6.dp))
+                    DateCapsule(date.timeText().take(5)) { showTime = true }
+                }
+                if (editing != null) {
+                    row(first = false) {
+                        Text("创建时间", style = Ios.body, color = c.label, modifier = Modifier.weight(1f))
+                        Text(fullStamp(editing.createdAt), style = Ios.body, color = c.secondaryLabel, maxLines = 1)
+                    }
+                }
+                row(first = false) {
+                    Text("备注", style = Ios.body, color = c.label)
+                    Spacer(Modifier.width(16.dp))
+                    IosInlineField(
+                        note, { note = it }, "可选",
+                        modifier = Modifier.onFocusChanged {
+                            noteFocused = it.isFocused
+                            // 备注框聚焦 → 收起自定义键盘；之后要改金额，点一下金额那行就回来
+                            if (it.isFocused) keypadShown = false
                         },
-                        maxLines = 1,
                     )
                 }
-                if (expr.hasOperator) {
-                    Text(
-                        amount?.let { "= ${formatYuan(it)}" } ?: "算不出来",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = if (amount == null) MaterialTheme.colorScheme.error
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                // 标签：点进标签弹层选（跟 iOS 一样）。选了的直接在这一行全部列出来 ——
+                // ⚠️ 不限量：这一行是「我给这笔挂了哪些标签」的答案，收成「+N」会被读成「只能挂 N 个」
+                row(first = false, onClick = { showTags = true }) {
+                    Text("标签", style = Ios.body, color = c.label)
+                    Spacer(Modifier.width(16.dp))
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                        if (selectedTags.isEmpty()) Text("可选", style = Ios.body, color = c.secondaryLabel)
+                        else TagChipRow(selectedTags, limit = null, compact = false)
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    IosChevron()
                 }
-            }
-
-            // ---- 分类九宫格 ----
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                SectionTitle("分类")
-                Spacer(Modifier.weight(1f))
-                // 管理入口放在标题右边：它是低频操作，不该跟十几个高频的分类格子抢位置。
-                // 有了它，记账记到一半发现分类不够用时不用退出去重进（对位 iOS 那颗「管理」）
-                TextButton(onClick = { showCategories = true }) { Text("管理") }
-            }
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(5),
-                modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                items(shown, key = { it.id }) { c ->
-                    CategoryCell(c, selected = c.id == effectiveKey) { chosenKey = c.id }
-                }
-            }
-
-            // ---- 标签 ----
-            //
-            // ⚠️⚠️ **直接铺在这儿，不要退回「一条灰条 + 底部弹层」那种写法**（2026-09-08 改的）。
-            // 原来那版要「点灰条 → 弹层里选 → 下滑关掉」三步，而且弹层盖着表单，
-            // 选完必须先关掉才看得见自己选了哪几个。**而分类就在上面直接铺着** ——
-            // 同一个页面上两件同性质的事一个铺开一个藏起来，这个不对称本身就是别扭的来源。
-            //
-            // 位置紧跟分类：分类和标签回答的是同一类问题（这笔是什么），
-            // 时间和备注是次要的，排在后面。
-            SectionTitle("标签")
-            TagPickerInline(selected = tagIds, onSelectedChange = { tagIds = it })
-
-            // ---- 时间 ----
-            SectionTitle("时间")
-            Column(verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
-                PickerRow(
-                    icon = Icons.Filled.Event, label = "日期", value = date.dateText(),
-                    shape = groupedShape(0, 2), onClick = { showDate = true },
-                )
-                PickerRow(
-                    icon = Icons.Filled.Schedule, label = "时刻", value = date.timeText(),
-                    shape = groupedShape(1, 2), onClick = { showTime = true },
-                )
-            }
-
-            // ---- 备注 ----
-            OutlinedTextField(
-                value = note, onValueChange = { note = it },
-                label = { Text("备注（可选）") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().onFocusChanged {
-                    noteFocused = it.isFocused
-                    // 备注框聚焦 → 收起自定义键盘；之后要改金额，点一下金额那行就回来
-                    if (it.isFocused) keypadShown = false
-                },
-            )
-
-            // ---- 私密 ----
-            //
-            // ⚠️⚠️ **锁着的时候这一段必须完全不存在，不是禁用、不是灰掉。**
-            // 别人拿你手机点一下「记一笔」，只要看见「私密记录」四个字，
-            // 「界面上完全无痕」这件事就当场破功了 —— 而且比在设置里放个开关暴露得更彻底，
-            // 因为记一笔是最顺手会被点开的地方。
-            //
-            // 这跟顶栏那颗锁头图标是同一条红线（2026-09-05 撤掉的那个）。
-            // 当时只撤了顶栏、漏了这里，是用户自己发现的：
-            // 「无论是不是在私密模式下，记一笔的最下面也有『私密记录』的选项」。
-            // iOS 那边一直是对的（`if gate.isUnlocked { Toggle }`），安卓漏抄了。
-            if (unlocked) {
-            Row(
-                Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("私密记录", style = MaterialTheme.typography.bodyLarge)
-                    // ⚠️ 这台机器没设锁屏密码 / 没录指纹时，这个开关其实是**没有牙的**：
-                    // 没有任何凭据可验，私密门只能直接放行（见 PrivacyGate.unlock ——
-                    // 那样做比"永久锁死、自己也拿不回来"诚实）。
-                    // 既然如此就得**当场说清楚**，不能让人以为记了私密就藏住了。
-                    if (hasDeviceLock(LocalContext.current)) {
-                        Text("锁着的时候整个 app 当它不存在（列表、合计、统计、小组件、导出全排除）",
-                             style = MaterialTheme.typography.bodySmall,
-                             color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } else {
-                        Text("这台手机还没设锁屏密码，所以这个开关挡不住人 —— 去系统设置里加一个锁屏密码或指纹，它才有用。",
-                             style = MaterialTheme.typography.bodySmall,
-                             color = MaterialTheme.colorScheme.error)
+                // ⚠️⚠️ **锁着的时候这一行必须完全不存在，不是禁用、不是灰掉。**
+                // 别人拿你手机点一下「记一笔」，只要看见「私密」两个字，「界面上完全无痕」就当场破功了
+                // —— 而且比在设置里放个开关暴露得更彻底，因为记一笔是最顺手会被点开的地方。
+                if (unlocked) {
+                    row(first = false) {
+                        Icon(Icons.Filled.Lock, null, tint = c.accent, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Text("私密", style = Ios.body, color = c.label, modifier = Modifier.weight(1f))
+                        IosSwitch(isPrivate, { privateChoice = it })
                     }
                 }
-                Spacer(Modifier.width(12.dp))
-                Switch(checked = isPrivate, onCheckedChange = { privateChoice = it })
-            }
             }
 
-            Spacer(Modifier.height(32.dp))
+            if (editing != null) {
+                // iOS 是点了直接删、不再确认 —— 这一行本来就在最底下、要特意滑下来点，误碰的机会很小
+                IosSection {
+                    row(first = true, onClick = { vm.delete(editing, onClose) }) {
+                        Text("删除这笔记录", style = Ios.body, color = c.red, textAlign = TextAlign.Center,
+                             modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            }
+        }
+        // 自定义键盘贴在底部。放在列下面而不是叠在内容上：滚到最底下的备注、私密那几行不会被键盘压住
+        androidx.compose.animation.AnimatedVisibility(
+            visible = keypadShown && !noteFocused,
+            enter = androidx.compose.animation.expandVertically(expandFrom = Alignment.Top),
+            exit = androidx.compose.animation.shrinkVertically(shrinkTowards = Alignment.Top),
+        ) {
+            AmountKeypad(onKey = { expr = expr.press(it) }, canSave = canSave, onSave = { save() })
         }
     }
 
-    // ⚠️ 分类管理是**盖在表单上面**的一层，不是把表单替换掉。
-    // 替换掉的话表单会离开 composition，它那些 `remember`（金额、选好的标签、改过的时间）
-    // 全部失忆 —— 用户从分类管理退回来会发现自己白填了。
-    // 盖一层则表单一直在树里，状态原样保留。
-    if (showCategories) {
-        BackHandler { showCategories = false }
-        Surface(Modifier.fillMaxSize()) {
-            CategoryManagerScreen(onBack = { showCategories = false })
-        }
+    // ⚠️ 分类管理、标签选择是**叠在表单上面**的弹层，不是把表单替换掉：
+    // 替换掉的话表单会离开 composition，它那些 `remember`（金额、选好的标签、改过的时间）全部失忆。
+    IosSheetHost(if (showCategories) Unit else null, { showCategories = false }) {
+        CategoryManagerScreen(onBack = { showCategories = false })
+    }
+    IosSheetHost(if (showTags) Unit else null, { showTags = false }) {
+        TagPickerSheet(tagIds, { tagIds = it }, onDone = { showTags = false })
+    }
     }
 
+    // 日期：iOS 那种月历；时刻：iOS 那种滚轮（见 IosPickers.kt）。时刻沿用 / 日期沿用，秒数保留
     if (showDate) {
-        val state = rememberDatePickerState(initialSelectedDateMillis = date)
-        DatePickerDialog(
-            onDismissRequest = { showDate = false },
-            confirmButton = {
-                TextButton(onClick = {
-                    state.selectedDateMillis?.let { picked ->
-                        // ⚠️ `selectedDateMillis` 是**UTC 当天零点**（Material 的约定），
-                        // 直接当本地时间戳用会在东八区差 8 小时、日期可能整个错一天。
-                        // 正确做法：只取它的「年月日」，时刻沿用用户原来那个。
-                        val d = Instant.ofEpochMilli(picked).atZone(ZoneId.of("UTC")).toLocalDate()
-                        val t = date.localDateTime()
-                        date = composeTimestamp(d, t.hour, t.minute, keepSecondsFrom = date)
-                    }
-                    showDate = false
-                }) { Text("好") }
-            },
-            dismissButton = { TextButton(onClick = { showDate = false }) { Text("取消") } },
-        ) { DatePicker(state = state) }
+        val t = date.localDateTime()
+        IosDatePickerDialog(t.toLocalDate(), { d ->
+            date = composeTimestamp(d, t.hour, t.minute, keepSecondsFrom = date)
+        }, { showDate = false })
     }
-
     if (showTime) {
         val t = remember { date.localDateTime() }
-        val state = rememberTimePickerState(initialHour = t.hour, initialMinute = t.minute, is24Hour = true)
-        AlertDialog(
-            onDismissRequest = { showTime = false },
-            title = { Text("时刻") },
-            text = { TimePicker(state = state) },
-            confirmButton = {
-                TextButton(onClick = {
-                    date = composeTimestamp(
-                        date.localDateTime().toLocalDate(),
-                        state.hour, state.minute, keepSecondsFrom = date,
-                    )
-                    showTime = false
-                }) { Text("好") }
-            },
-            dismissButton = { TextButton(onClick = { showTime = false }) { Text("取消") } },
-        )
-    }
-
-    if (confirmDelete && editing != null) {
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            title = { Text("删掉这笔？") },
-            text = { Text("删掉之后另一台设备下次同步也会跟着删。") },
-            confirmButton = {
-                TextButton(onClick = { vm.delete(editing, onClose) }) {
-                    Text("删除", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } },
-        )
+        IosTimePickerDialog(t.hour, t.minute, { h, m ->
+            date = composeTimestamp(date.localDateTime().toLocalDate(), h, m, keepSecondsFrom = date)
+        }, { showTime = false })
     }
 }
 
+/// iOS 紧凑日期选择器的样子：一颗灰底胶囊里写着当前值，点开再选
 @Composable
-private fun SectionTitle(text: String) {
-    Text(text, style = MaterialTheme.typography.titleSmall,
-         modifier = Modifier.padding(start = 4.dp))
+private fun DateCapsule(text: String, onClick: () -> Unit) {
+    Text(
+        text, style = Ios.body, color = Ios.c.label,
+        modifier = Modifier.clip(CircleShape).background(Ios.c.fill).clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    )
 }
 
-/// 「日期 / 时刻」那两行。左边图标 + 名字，右边当前值，整行可点。
-@Composable
-private fun PickerRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    value: String,
-    shape: androidx.compose.ui.graphics.Shape,
-    onClick: () -> Unit,
-) {
-    Surface(
-        onClick = onClick,
-        shape = shape,
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(icon, null, Modifier.size(20.dp),
-                 tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.width(12.dp))
-            Text(label, style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.weight(1f))
-            Text(value, style = MaterialTheme.typography.bodyMedium,
-                 color = MaterialTheme.colorScheme.primary)
-        }
-    }
-}
+/// 「2026-10-13 12:19:19」—— 创建时间那一行（对位 iOS `fullStampTitle`）
+private fun fullStamp(ms: Long): String =
+    Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault())
+        .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
 
+/// 分类格子：44×44 的圆角方块（选中涂满分类色、图标变白），下面一行小字名字（对位 iOS `categoryCell`）
 @Composable
-private fun CategoryCell(c: CategoryEntity, selected: Boolean, onClick: () -> Unit) {
-    val color = categoryColor(c.colorIndex)
+private fun CategoryCell(cat: CategoryEntity, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    val color = categoryColor(cat.colorIndex)
     Column(
-        Modifier.clip(RoundedCornerShape(14.dp))
-            .background(if (selected) color else color.copy(alpha = 0.14f))
-            .clickable(onClick = onClick)
-            .padding(vertical = 8.dp),
+        modifier.clickable(remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, null, onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Icon(
-            categoryIcon(c.iconName), contentDescription = null,
-            tint = if (selected) Color.White else color,
-            modifier = Modifier.size(20.dp),
-        )
-        Text(
-            c.name, style = MaterialTheme.typography.labelSmall,
-            color = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
-            maxLines = 1, textAlign = TextAlign.Center,
-        )
+        Box(
+            Modifier.size(44.dp).clip(RoundedCornerShape(13.dp)).background(if (selected) color else color.copy(alpha = 0.15f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(categoryIcon(cat.iconName), null, tint = if (selected) Color.White else color, modifier = Modifier.size(22.dp))
+        }
+        Text(cat.name, style = Ios.caption2, color = if (selected) Ios.c.label else Ios.c.secondaryLabel,
+             maxLines = 1, textAlign = TextAlign.Center)
     }
 }

@@ -130,6 +130,8 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
 
     implementation(libs.activity.compose)
+    implementation(libs.backdrop)
+    implementation(libs.kyant.shapes)
     implementation(libs.lifecycle.viewmodel.compose)
     implementation(libs.lifecycle.runtime.compose)
     implementation(libs.navigation.compose)

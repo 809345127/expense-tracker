@@ -8,13 +8,18 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.Sell
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -48,22 +53,21 @@ import kotlinx.coroutines.launch
 
 // ---------------------------------------------------------------- 小胶囊
 
-/// 标签小胶囊。对位 iOS `Components.swift` 的 `TagChip`。
+/// 标签小胶囊。对位 iOS `Components.swift` 的 `TagChip`（字号 caption2 / caption，左右 6 / 8、上下 2 / 3）。
 @Composable
 fun TagChip(name: String, colorIndex: Int, compact: Boolean = true) {
     val c = tagColor(colorIndex)
     Text(
         name,
-        style = if (compact) MaterialTheme.typography.labelSmall
-                else MaterialTheme.typography.labelMedium,
+        style = if (compact) Ios.caption2 else Ios.caption,
         color = c,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier
             .clip(CircleShape)
             .background(c.copy(alpha = 0.15f))
-            .padding(horizontal = if (compact) 7.dp else 9.dp,
-                     vertical = if (compact) 2.dp else 4.dp),
+            .padding(horizontal = if (compact) 6.dp else 8.dp,
+                     vertical = if (compact) 2.dp else 3.dp),
     )
 }
 
@@ -86,8 +90,8 @@ fun TagChipRow(tags: List<TagEntity>, limit: Int? = 2, compact: Boolean = true) 
         if (tags.size > shown.size) {
             Text(
                 "+${tags.size - shown.size}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = Ios.caption2,
+                color = Ios.c.secondaryLabel,
                 // ⚠️ FlowRow 没有 verticalAlignment 这个参数，垂直对齐要在子项上用
                 // FlowRowScope 的 Modifier.align（写成参数编译不过）
                 modifier = Modifier.align(Alignment.CenterVertically),
@@ -145,75 +149,147 @@ class TagsViewModel(app: Application) : AndroidViewModel(app) {
     fun delete(tag: TagEntity) = viewModelScope.launch { repo.deleteTag(tag) }
 }
 
-// ---------------------------------------------------------------- 选择器（选 + 新建）
+// ---------------------------------------------------------------- 选择器（选 + 新建 + 改名 + 删除）
 
-/// 记一笔页面里**直接平铺**的标签选择器。一次点击就选上／取消，没有弹层、没有确认按钮。
+/// 标签选择弹层。**照 iOS `TagPickerView` 做**（2026-10-13）：从「记一笔」的「标签」那一行点进来，
+/// 左上「清空」、右上「完成」；中间一张白卡，一行一个标签（色点 + 名字 + 用了几笔 + 勾）；
+/// 最底下一个搜索框，**输入一个还没有的名字就多出一行「新建标签『xx』」**；
+/// 往左滑一行出「改名」「删除」。
 ///
-/// 跟 2026-09-08 之前那个底部弹层版比，少了两样东西，都是因为它长在表单里、不是临时浮层：
-///   ① **那句「一笔可以打多个标签」的说明**——chip 能多选这件事点一下就知道了，
-///      而表单里每一行说明都在跟真正要填的东西抢位置；
-///   ② **「用在 N 笔」那个数字**——记账当下不关心这个标签历史上用过几次，
-///      那个数只在「标签管理」那种盘点场景有用；挤在名字旁边还容易被读成金额。
-///      （盘点场景仍然有：`TagManagerScreen` 用的就是 `vm.usage`。）
-@OptIn(ExperimentalLayoutApi::class)
+/// 安卓原来是表单里直接铺一排 chip、另有一个「标签管理」页；iOS 没有单独的管理页，
+/// 改名和删除就在这个选择器里左滑做，现在两边一样了。
+///
+/// 选中状态是**直接改外面的**（没有「取消」）：跟 iOS 一样，「完成」只是关掉。
 @Composable
-fun TagPickerInline(
+fun TagPickerSheet(
     selected: Set<String>,
     onSelectedChange: (Set<String>) -> Unit,
+    onDone: () -> Unit,
     vm: TagsViewModel = viewModel(),
 ) {
     val active by vm.tags.collectAsStateWithLifecycle()
     val all by vm.allTags.collectAsStateWithLifecycle()
-    var creating by remember { mutableStateOf(false) }
+    val usage by vm.usage.collectAsStateWithLifecycle()
+    var search by remember { mutableStateOf("") }
+    var swiped by remember { mutableStateOf<String?>(null) }
+    var renaming by remember { mutableStateOf<TagEntity?>(null) }
+    var deleting by remember { mutableStateOf<TagEntity?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
+    val c = Ios.c
 
     // ⚠️ 停用（`isArchived`）的标签**平时不列出来，但已经挂在这笔账上的必须列出来**，
     // 否则那个选中状态在界面上根本看不见 —— 用户既不知道这笔挂着它、也没法取消。
-    // （旧的弹层版是把已选标签在表单里另外只读显示一遍，才没暴露这个问题。）
-    // 目前两端都还没有「停用标签」的入口，所以这一段现在跑不到；留着是为了以后加入口时不用回来补。
     val tags = remember(active, all, selected) {
         val extra = all.filter { it.isArchived && it.id in selected }
         if (extra.isEmpty()) active else active + extra
     }
+    val key = search.trim().lowercase()
+    val visible = if (key.isEmpty()) tags else tags.filter { it.name.lowercase().contains(key) }
+    // 输入的名字还没有 → 顶上多一行「新建」。重名（不分大小写、去首尾空格）不给建
+    val newName = search.trim().takeIf { n -> n.isNotEmpty() && tags.none { it.name.trim().lowercase() == n.lowercase() } }
 
-    FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        tags.forEach { tag ->
-            val isOn = tag.id in selected
-            FilterChip(
-                selected = isOn,
-                onClick = { onSelectedChange(if (isOn) selected - tag.id else selected + tag.id) },
-                label = { Text(tag.name) },
-                leadingIcon = {
-                    if (isOn) Icon(Icons.Filled.Check, null, Modifier.size(18.dp))
-                    else Box(
-                        Modifier.size(10.dp).clip(CircleShape)
-                            .background(tagColor(tag.colorIndex))
-                    )
-                },
-            )
+    IosSheetHeader(
+        "标签",
+        leading = { IosPillButton("清空", { onSelectedChange(emptySet()) }, enabled = selected.isNotEmpty()) },
+        trailing = { IosPillButton("完成", onDone, prominent = true) },
+    )
+    Column(Modifier.fillMaxSize()) {
+        Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(top = 12.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp),
+        ) {
+            if (newName != null) {
+                IosSection {
+                    row(first = true, onClick = {
+                        vm.add(newName) { id ->
+                            if (id == null) message = "已经有一个叫「$newName」的标签了。"
+                            else { onSelectedChange(selected + id); search = "" }   // 建完顺手选上
+                        }
+                    }) {
+                        Icon(Icons.Filled.AddCircle, null, tint = c.accent, modifier = Modifier.size(22.dp))
+                        Spacer(Modifier.width(10.dp))
+                        Text("新建标签「$newName」", style = Ios.body, color = c.accent)
+                    }
+                }
+            }
+            if (tags.isEmpty()) {
+                Column(
+                    Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 40.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(Icons.Outlined.Sell, null, tint = c.secondaryLabel, modifier = Modifier.size(44.dp))
+                    Text("还没有标签", style = Ios.title2.copy(fontSize = 20.sp), color = c.label)
+                    Text("在下面搜索框里直接输入名字就能新建，比如「出差」「可报销」「请客」。",
+                         style = Ios.subheadline, color = c.secondaryLabel, textAlign = TextAlign.Center)
+                }
+            } else if (visible.isNotEmpty()) {
+                IosSection(footer = "一笔可以打多个标签。左滑某个标签可以改名或删除。") {
+                    visible.forEachIndexed { i, tag ->
+                        IosSwipeRow(
+                            open = swiped == tag.id,
+                            onOpenChange = { swiped = if (it) tag.id else null },
+                            actions = listOf(
+                                IosSwipeAction("删除", c.red) { swiped = null; deleting = tag },
+                                IosSwipeAction("改名", c.orange) { swiped = null; renaming = tag },
+                            ),
+                        ) {
+                            row(first = i == 0, separatorIndent = Ios.rowInset + 20.dp, onClick = {
+                                onSelectedChange(if (tag.id in selected) selected - tag.id else selected + tag.id)
+                            }) {
+                                Box(Modifier.size(10.dp).clip(CircleShape).background(tagColor(tag.colorIndex)))
+                                Spacer(Modifier.width(10.dp))
+                                Text(tag.name, style = Ios.body, color = c.label, modifier = Modifier.weight(1f))
+                                Text("${usage[tag.id] ?: 0}", style = Ios.caption, color = c.tertiaryLabel)
+                                if (tag.id in selected) {
+                                    Spacer(Modifier.width(10.dp))
+                                    Icon(Icons.Filled.Check, "已选", tint = c.accent, modifier = Modifier.size(20.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
-        AssistChip(
-            onClick = { creating = true },
-            label = { Text("新建") },
-            leadingIcon = { Icon(Icons.Filled.Add, null, Modifier.size(18.dp)) },
-        )
+        // 底部搜索框（iOS 26 的 .searchable 在弹层里就放在最底下）
+        Row(
+            Modifier.padding(horizontal = Ios.sideInset, vertical = 10.dp).fillMaxWidth().height(48.dp)
+                .iosFloating(CircleShape).padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.Search, null, tint = c.label, modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(10.dp))
+            IosInlineField(search, { search = it }, "搜索，或输入新标签名", align = TextAlign.Start)
+        }
     }
 
-    if (creating) {
-        TagNameDialog(
-            title = "新建标签",
-            initial = "",
-            confirmLabel = "建",
-            onClose = { creating = false },
-            onConfirm = { name ->
-                vm.add(name) { id ->
-                    if (id == null) message = "已经有一个叫「${name.trim()}」的标签了。"
-                    else onSelectedChange(selected + id)   // 建完顺手选上，省一次点击
-                }
-            },
+    renaming?.let { tag ->
+        var text by remember(tag.id) { mutableStateOf(tag.name) }
+        IosAlert(
+            "重命名标签", null,
+            buttons = listOf(
+                IosAlertButton("取消", cancel = true) { renaming = null },
+                IosAlertButton("保存", enabled = text.isNotBlank()) {
+                    val name = text
+                    renaming = null
+                    vm.rename(tag, name) { ok -> if (!ok) message = "已经有一个叫「${name.trim()}」的标签了。" }
+                },
+            ),
+            onDismiss = { renaming = null },
+            field = { IosAlertField(text, { text = it }, "标签名") },
+        )
+    }
+    deleting?.let { tag ->
+        IosAlert(
+            "删除标签「${tag.name}」？",
+            "这个标签用在 ${usage[tag.id] ?: 0} 笔记录上。删掉后那些记录会失去这个标签，金额和其它内容不受影响。",
+            buttons = listOf(
+                IosAlertButton("取消", cancel = true) { deleting = null },
+                IosAlertButton("删除", destructive = true) {
+                    onSelectedChange(selected - tag.id); vm.delete(tag); deleting = null
+                },
+            ),
+            onDismiss = { deleting = null },
         )
     }
     message?.let { Notice(it) { message = null } }
@@ -221,7 +297,7 @@ fun TagPickerInline(
 
 // ---------------------------------------------------------------- 共用的小弹框
 
-/// 输名字的弹框（新建和改名共用）。
+/// 输名字的弹框（新建和改名共用）。iOS 弹框长相
 @Composable
 fun TagNameDialog(
     title: String,
@@ -232,28 +308,14 @@ fun TagNameDialog(
     onConfirm: (String) -> Unit,
 ) {
     var text by remember { mutableStateOf(initial) }
-    AlertDialog(
-        onDismissRequest = onClose,
-        title = { Text(title) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = text, onValueChange = { text = it },
-                    label = { Text("标签名") }, singleLine = true,
-                )
-                if (hint != null) {
-                    Text(hint, style = MaterialTheme.typography.bodySmall,
-                         color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = text.isNotBlank(),
-                onClick = { onConfirm(text); onClose() },
-            ) { Text(confirmLabel) }
-        },
-        dismissButton = { TextButton(onClick = onClose) { Text("取消") } },
+    IosAlert(
+        title, hint,
+        buttons = listOf(
+            IosAlertButton("取消", cancel = true, onClick = onClose),
+            IosAlertButton(confirmLabel, enabled = text.isNotBlank()) { onConfirm(text); onClose() },
+        ),
+        onDismiss = onClose,
+        field = { IosAlertField(text, { text = it }, "标签名") },
     )
 }
 
@@ -261,9 +323,5 @@ fun TagNameDialog(
 /// 用户会以为按钮坏了，然后再点几次
 @Composable
 fun Notice(message: String, onClose: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onClose,
-        text = { Text(message) },
-        confirmButton = { TextButton(onClick = onClose) { Text("好") } },
-    )
+    IosAlert(message, null, listOf(IosAlertButton("好", onClick = onClose)), onClose)
 }

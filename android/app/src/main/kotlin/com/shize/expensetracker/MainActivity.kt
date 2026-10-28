@@ -3,19 +3,13 @@ package com.shize.expensetracker
 import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.ExperimentalAnimationApi
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.PieChart
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -26,7 +20,10 @@ import com.shize.expensetracker.data.ExpenseEntity
 import com.shize.expensetracker.data.ExpenseFilter
 import com.shize.expensetracker.sync.SyncRunner
 import com.shize.expensetracker.sync.SyncWorker
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.shize.expensetracker.ui.*
+import com.shize.expensetracker.ui.glass.HomeBottomBar
 import com.shize.expensetracker.ui.theme.AppTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -43,17 +40,17 @@ import kotlinx.coroutines.launch
 /// FragmentActivity 本身继承自 ComponentActivity，所以 `setContent` 照样能用。
 class MainActivity : FragmentActivity() {
 
-    private sealed interface Screen {
-        /// 层级深度：转场要靠它判断是「往里进」还是「往回退」。首页 0，推出去的页面 1。
-        val depth: Int
-
-        data object Home : Screen { override val depth = 0 }
-        data object Sync : Screen { override val depth = 1 }
-        data object Categories : Screen { override val depth = 1 }
-        data object Tags : Screen { override val depth = 1 }
-        data object Export : Screen { override val depth = 1 }
-        data class Form(val editing: ExpenseEntity?) : Screen { override val depth = 1 }
-        data object Smart : Screen { override val depth = 1 }
+    /// 首页之外的每一屏都是**从底下推上来的弹层**（iOS 的 sheet），首页一直留在后面。
+    ///
+    /// 2026-10-13 之前是「横向推进的整页」（安卓的习惯）。用户要求界面全部照 iOS 来，
+    /// iOS 那边记一笔 / 智能记账 / 筛选 / 导出 / 同步 / 分类管理全是弹层，所以这里也改成弹层：
+    /// 后面的首页变暗但还看得见，往下拖或按返回就收起。
+    private sealed interface Sheet {
+        data object Sync : Sheet
+        data object Export : Sheet
+        data object Filter : Sheet
+        data class Form(val editing: ExpenseEntity?) : Sheet
+        data object Smart : Sheet
     }
 
     private enum class Tab { List, Stats }
@@ -82,7 +79,6 @@ class MainActivity : FragmentActivity() {
         if (i.getBooleanExtra("openSmart", false)) debugSmart.value = i.getStringExtra("smartText") to i.getStringExtra("smartImage")
     }
 
-    @OptIn(ExperimentalAnimationApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -95,7 +91,7 @@ class MainActivity : FragmentActivity() {
 
         setContent {
             AppTheme {
-                var screen by remember { mutableStateOf<Screen>(Screen.Home) }
+                var sheet by remember { mutableStateOf<Sheet?>(null) }
                 var tab by remember { mutableStateOf(Tab.List) }
                 val unlocked by gate.unlocked.collectAsStateWithLifecycle()
 
@@ -109,12 +105,12 @@ class MainActivity : FragmentActivity() {
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
                 }
 
-                LaunchedEffect(debugSmart.value) { if (debugSmart.value != null) screen = Screen.Smart }
+                LaunchedEffect(debugSmart.value) { if (debugSmart.value != null) sheet = Sheet.Smart }
 
                 // 小组件那颗「＋」进来 → 直接推到记一笔
                 LaunchedEffect(pendingAdd.value) {
                     if (pendingAdd.value) {
-                        screen = Screen.Form(null)
+                        sheet = Sheet.Form(null)
                         pendingAdd.value = false
                     }
                 }
@@ -126,83 +122,66 @@ class MainActivity : FragmentActivity() {
                     else lifecycleScope.launch { gate.unlock(this@MainActivity) }
                 }
 
-                val bottomBar: @Composable () -> Unit = {
-                    NavigationBar {
-                        NavigationBarItem(
-                            selected = tab == Tab.List,
-                            onClick = { tab = Tab.List },
-                            icon = { Icon(Icons.AutoMirrored.Filled.List, null) },
-                            label = { Text("明细") },
-                        )
-                        NavigationBarItem(
-                            selected = tab == Tab.Stats,
-                            onClick = { tab = Tab.Stats },
-                            icon = { Icon(Icons.Filled.PieChart, null) },
-                            label = { Text("统计") },
-                        )
-                    }
-                }
+                /// 首页底部那条玻璃要「透出」身后的页面，所以首页内容先录进这个图层。
+                /// 见 ui/glass/HomeBottomBar.kt 顶部的说明
+                val backdrop = rememberLayerBackdrop()
 
-                // 系统返回键 / 返回手势。
-                // ⚠️ 不接的话按返回是**直接退出 app**（默认行为），而在安卓上返回是
-                // 一等一的导航方式 —— 从「导出」页按返回退出整个 app 会被当成崩了。
-                // 只在推出去的页面上拦；首页不拦（首页按返回退出 app 才是对的）。
-                BackHandler(enabled = screen != Screen.Home) { screen = Screen.Home }
+                // 系统返回键 / 返回手势：有弹层时关弹层（IosSheetHost 里接的），
+                // 首页不拦 —— 首页按返回退出 app 才是对的
+                val close: () -> Unit = { sheet = null }
 
-                AnimatedContent(
-                    targetState = screen,
-                    transitionSpec = {
-                        // 首页 ↔ 推出去的页面：横向推进，方向跟返回手势一致
-                        pushTransform(forward = targetState.depth > initialState.depth)
-                    },
-                    label = "screen",
-                ) { s ->
-                    when (s) {
-                        Screen.Home -> AnimatedContent(
-                            targetState = tab,
-                            // 底部两个 tab 是**平级**的，用淡入淡出穿透。
-                            // 横向推进会让人以为「统计在明细右边」，而 tab 没有先后
-                            transitionSpec = { fadeThroughTransform() },
-                            label = "tab",
-                        ) { t ->
-                            when (t) {
-                                Tab.List -> ExpenseListScreen(
-                                    onOpenSync = { screen = Screen.Sync },
-                                    onOpenCategories = { screen = Screen.Categories },
-                                    onOpenTags = { screen = Screen.Tags },
-                                    onOpenExport = { screen = Screen.Export },
-                                    onToggleLock = toggleLock,
-                                    onAdd = { screen = Screen.Form(null) },
-                                    onSmart = { screen = Screen.Smart },
-                                    onEdit = { screen = Screen.Form(it) },
-                                    bottomBar = bottomBar,
-                                )
-                                Tab.Stats -> StatsScreen(
-                                    onToggleLock = toggleLock,
-                                    // 点排行里的某一行 → 把条件换成「只看这一个」并切回明细。
-                                    // ⚠️ 是**换**不是叠加：点第二个分类应该是「改看那个」，
-                                    // 要两个都要就去筛选面板里选（跟 iOS 同一个决定）
-                                    onDrillDown = { f: ExpenseFilter ->
-                                        app.filter.value = f
-                                        tab = Tab.List
-                                    },
-                                    bottomBar = bottomBar,
-                                )
-                            }
+                Box(Modifier.fillMaxSize()) {
+                    AnimatedContent(
+                        targetState = tab,
+                        modifier = Modifier.fillMaxSize().layerBackdrop(backdrop),
+                        // 底部两个 tab 是**平级**的，用淡入淡出穿透。
+                        // 横向推进会让人以为「统计在明细右边」，而 tab 没有先后
+                        transitionSpec = { fadeThroughTransform() },
+                        label = "tab",
+                    ) { t ->
+                        when (t) {
+                            Tab.List -> ExpenseListScreen(
+                                onOpenSync = { sheet = Sheet.Sync },
+                                onOpenExport = { sheet = Sheet.Export },
+                                onOpenFilter = { sheet = Sheet.Filter },
+                                onToggleLock = toggleLock,
+                                onEdit = { sheet = Sheet.Form(it) },
+                            )
+                            Tab.Stats -> StatsScreen(
+                                onToggleLock = toggleLock,
+                                // 点排行里的某一行 → 把条件换成「只看这一个」并切回明细。
+                                // ⚠️ 是**换**不是叠加：点第二个分类应该是「改看那个」，
+                                // 要两个都要就去筛选面板里选（跟 iOS 同一个决定）
+                                onDrillDown = { f: ExpenseFilter ->
+                                    app.filter.value = f
+                                    tab = Tab.List
+                                },
+                            )
                         }
-                        Screen.Sync -> SyncSettingsScreen(onBack = { screen = Screen.Home })
-                        Screen.Categories -> CategoryManagerScreen(onBack = { screen = Screen.Home })
-                        Screen.Tags -> TagManagerScreen(onBack = { screen = Screen.Home })
-                        Screen.Export -> ExportScreen(onBack = { screen = Screen.Home })
-                        Screen.Smart -> SmartEntryScreen(
-                            onClose = { screen = Screen.Home },
-                            debugText = debugSmart.value?.first,
-                            debugImage = debugSmart.value?.second,
-                        )
-                        is Screen.Form -> ExpenseFormScreen(
-                            editing = s.editing,
-                            onClose = { screen = Screen.Home },
-                        )
+                    }
+                    // 浮在两页上面、切页时不动（跟 iOS 两页各挂一份同款工具栏是一个观感）。
+                    // 「+」两页都有：不用先切回明细才能记账（iOS 同理）
+                    HomeBottomBar(
+                        backdrop = backdrop,
+                        statsSelected = tab == Tab.Stats,
+                        onSelectTab = { tab = if (it) Tab.Stats else Tab.List },
+                        onAdd = { sheet = Sheet.Form(null) },
+                        onSmart = { sheet = Sheet.Smart },
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                    )
+
+                    IosSheetHost(sheet, onDismiss = close) { s ->
+                        when (s) {
+                            Sheet.Sync -> SyncSettingsScreen(onBack = close)
+                            Sheet.Export -> ExportScreen(onBack = close)
+                            Sheet.Filter -> FilterSheet(onDismiss = close)
+                            Sheet.Smart -> SmartEntryScreen(
+                                onClose = close,
+                                debugText = debugSmart.value?.first,
+                                debugImage = debugSmart.value?.second,
+                            )
+                            is Sheet.Form -> ExpenseFormScreen(editing = s.editing, onClose = close)
+                        }
                     }
                 }
             }

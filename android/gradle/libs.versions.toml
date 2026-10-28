@@ -31,6 +31,9 @@ junit = "4.13.2"
 # 智能记账的本地读字（2026-10-09）。⚠️ 用「打包进 app」的这一版，不用 play-services 那一版：
 # 后者要靠谷歌服务下载模型，国内 vivo 上没有谷歌服务、永远下不下来。代价是安装包大十来 MB
 mlkitTextChinese = "16.0.1"
+# 液态玻璃（2026-10-13，首页底部那条）。⚠️ 锁 1.0.6、别升 2.0.x：2.0 起要 compileSdk 37 + Kotlin 2.4，
+# 1.0.6 正好是 compileSdk 36 / Kotlin 2.3 / Compose 1.10，跟这里对得上（查 aar 里的 aar-metadata 确认过）
+backdrop = "1.0.6"
 
 [libraries]
 compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
@@ -60,6 +63,10 @@ retrofit-serialization = { group = "com.squareup.retrofit2", name = "converter-k
 okhttp-logging = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serialization" }
 datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
+backdrop = { group = "io.github.kyant0", name = "backdrop", version.ref = "backdrop" }
+# 胶囊形状 Capsule 在这个库里。backdrop 自己也依赖它，但声明成了 runtime 范围（编译时看不见），
+# 所以要直接引一次；版本跟 backdrop 1.0.6 声明的那个一致，别单独升
+kyant-shapes = { group = "io.github.kyant0", name = "shapes", version = "1.2.0" }
 mlkit-text-chinese = { group = "com.google.mlkit", name = "text-recognition-chinese", version.ref = "mlkitTextChinese" }
 biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
 # 单元测试。用 JUnit4 而不是 5：AGP 的默认测试运行器就是 JUnit4，

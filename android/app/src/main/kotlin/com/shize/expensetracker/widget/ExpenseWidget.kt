@@ -7,7 +7,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
-import androidx.glance.GlanceTheme
+import androidx.compose.ui.graphics.Color
+import androidx.glance.color.ColorProvider
 import androidx.glance.LocalContext
 import androidx.glance.LocalSize
 import androidx.glance.action.actionStartActivity
@@ -61,9 +62,20 @@ class ExpenseWidget : GlanceAppWidget() {
         // 不能跑挂起的库查询
         val summary = App.from(context).repository.widgetSummary()
         provideContent {
-            GlanceTheme { WidgetBody(summary) }
+            WidgetBody(summary)
         }
     }
+}
+
+/// 小组件的配色：**固定用 iOS 的系统色**（2026-10-13 起「所有 UI 都照 iOS」），
+/// 不再跟壁纸动态取色（GlanceTheme）—— 两台手机桌面上的小组件要长得一样。
+/// 每个颜色给一对：浅色模式 / 深色模式。
+private object W {
+    val bg = ColorProvider(day = Color.White, night = Color(0xFF1C1C1E))
+    val label = ColorProvider(day = Color.Black, night = Color.White)
+    val secondary = ColorProvider(day = Color(0x993C3C43), night = Color(0x99EBEBF5))
+    val accent = ColorProvider(day = Color(0xFF007AFF), night = Color(0xFF0A84FF))
+    val onAccent = ColorProvider(day = Color.White, night = Color.White)
 }
 
 @Composable
@@ -77,7 +89,7 @@ private fun WidgetBody(s: WidgetSummary) {
     // 拿档位当代理，代理关系在某个尺寸上就断了。所以这里直接用剩余高度做除法。
     val size = LocalSize.current
     val compact = size.height < 120.dp
-    val amountHeight = if (compact) 26.dp else 32.dp
+    val amountHeight = if (compact) 28.dp else 36.dp
     // 固定占掉的部分：自己的上下内边距 + 顶部那一行（里面那颗胶囊比文字高）+ 间距 +
     // 金额 + 间距 + **桌面自己给小组件加的外边距**。
     //
@@ -94,8 +106,8 @@ private fun WidgetBody(s: WidgetSummary) {
     Column(
         modifier = GlanceModifier
             .fillMaxSize()
-            .background(GlanceTheme.colors.widgetBackground)
-            .cornerRadius(16.dp)
+            .background(W.bg)
+            .cornerRadius(22.dp)
             .padding(14.dp)
             // 整块的默认去处：打开 app、停在明细页。
             // ⚠️ 右上角那颗「+」自己挂了另一个去处，会盖掉这一层
@@ -107,12 +119,12 @@ private fun WidgetBody(s: WidgetSummary) {
         ) {
             Text(
                 s.monthLabel,
-                style = TextStyle(fontSize = 11.sp, color = GlanceTheme.colors.onSurfaceVariant),
+                style = TextStyle(fontSize = 11.sp, color = W.secondary),
             )
             Spacer(GlanceModifier.defaultWeight())
             Text(
                 "${s.count} 笔",
-                style = TextStyle(fontSize = 11.sp, color = GlanceTheme.colors.onSurfaceVariant),
+                style = TextStyle(fontSize = 11.sp, color = W.secondary),
             )
             Spacer(GlanceModifier.width(8.dp))
             AddButton()
@@ -125,15 +137,15 @@ private fun WidgetBody(s: WidgetSummary) {
             Text(
                 "这个月还没记账",
                 style = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Medium,
-                                  color = GlanceTheme.colors.onSurface),
+                                  color = W.label),
             )
         } else {
             Text(
                 formatYuan(s.total),
                 style = TextStyle(
-                    fontSize = if (compact) 22.sp else 26.sp,
+                    fontSize = if (compact) 24.sp else 30.sp,
                     fontWeight = FontWeight.Bold,
-                    color = GlanceTheme.colors.onSurface,
+                    color = W.label,
                 ),
             )
             if (rankRows > 0) {
@@ -141,11 +153,11 @@ private fun WidgetBody(s: WidgetSummary) {
                 for (slice in s.top.take(rankRows)) {
                     Row(GlanceModifier.fillMaxWidth()) {
                         Text(slice.name, style = TextStyle(
-                            fontSize = 11.sp, color = GlanceTheme.colors.onSurfaceVariant))
+                            fontSize = 11.sp, color = W.secondary))
                         Spacer(GlanceModifier.defaultWeight())
                         Text(formatYuan(slice.amount), style = TextStyle(
                             fontSize = 11.sp, fontWeight = FontWeight.Medium,
-                            color = GlanceTheme.colors.onSurfaceVariant))
+                            color = W.secondary))
                     }
                     Spacer(GlanceModifier.height(2.dp))
                 }
@@ -166,13 +178,13 @@ private fun AddButton() {
     Text(
         "＋ 记一笔",
         style = TextStyle(
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            color = GlanceTheme.colors.onPrimary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = W.onAccent,
             textAlign = TextAlign.Center,
         ),
         modifier = GlanceModifier
-            .background(GlanceTheme.colors.primary)
+            .background(W.accent)
             .cornerRadius(11.dp)
             // 命中区靠这圈 padding 撑起来（约 66×26 dp），比视觉上那个胶囊大一圈
             .padding(horizontal = 9.dp, vertical = 5.dp)
